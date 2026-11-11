@@ -1,36 +1,19 @@
-# ProfitBot Android v0.3
+# ProfitBot Android Cloud Connection (v0.5)
 
-## الجديد
-- Product Radar أولي يرتب الفرص بمعادلة قابلة للتغيير: الطلب 45%، انخفاض المنافسة 35%، هامش الربح 20%.
-- عرض حساب ربح تقديري لكل منتج.
-- صندوق موافقات المالك للنشر والشراء والدفع (واجهة تجريبية فقط).
-- خطة قنوات تسويق عضوية: Blogger/SEO وReddit وPinterest وShorts/TikTok وGoogle Trends.
-- صفحة اتصالات الحسابات مع توضيح متطلبات الربط.
+## Cloud connection
+The Android app now has an **اتصال الخادم** screen. Enter the owner token created in Render as `OWNER_API_TOKEN`. The token is held in app memory only and is not saved to disk or bundled into the APK.
 
-## تشغيل Android Studio
-1. فك ضغط ZIP.
-2. Android Studio > Open > اختر مجلد ProfitBot_Android_v0.3.
-3. استخدم JDK 17 ووافق على Gradle Sync.
-4. شغّل على محاكي أو هاتف.
+The app calls:
+- `GET /owner/summary`
+- `GET /products`
 
-## الحالة بوضوح
-Prototype محلي. بطاقات المنتجات الثلاث بيانات اصطناعية لا تمثل فرصاً حقيقية ولا طلباً سوقياً مثبتاً. لا توجد اتصالات حية أو تسجيل دخول أو نشر أو شراء أو دفع. لا يوجد APK مبني أو اختبار جهاز في هذه البيئة.
+using HTTPS and an `Authorization: Bearer <token>` header.
 
-## قرارات التشغيل
-- الهدف التخطيطي: 100 USD شهرياً، دون ضمان.
-- الأسواق: عالمية حيثما يسمح القانون والشحن والدفع.
-- كل فئات المنتجات مرشحة، لكن يجب اجتياز بوابات الربحية والجودة والمخاطر.
-- لا إنفاق أو نشر أو شراء أو تحويل دون موافقة المالك.
-- لا تستعمل بيانات دخول مباشرة. استخدم OAuth وBackend آمن.
-- PayPal Personal: تحقق من تفعيل استقبال المدفوعات التجارية وميزات Checkout لحسابك.
-- RedotPay Card: لا تعاملها كوسيلة لاستقبال مدفوعات العملاء.
-- Binance: خارج Checkout المتجر في الإصدار الأول.
+## Build
+Open the `android/` directory in Android Studio, allow Gradle Sync, then use **Build > Build Bundle(s) / APK(s) > Build APK(s)**.
 
-## المرحلة الهندسية القادمة
-1. تخزين محلي وقاعدة بيانات للمنتجات والموردين والقرارات.
-2. ربط Blogger OAuth.
-3. مصادر اتجاهات/منتجات رسمية وموثوقة.
-4. الموردون: تكلفة المنتج والشحن والمدة والمخزون وسياسة الإرجاع.
-5. حساب ربح شامل لكل بلد وعملة ورسوم.
-6. مزامنة متجر مستقل بعد اختيار المنصة والتحقق من قبول PayPal.
-7. اختبارات أمنية وتشغيلية قبل أي صلاحيات مالية.
+## Important
+- Do not commit the owner token or any API secrets.
+- The app does not execute payments, purchases, refunds, publishing, or transfers.
+- Existing sample product cards are explicitly demo data. Cloud products appear in the connection screen.
+- Cloud database persistence must be configured separately before relying on production data.
