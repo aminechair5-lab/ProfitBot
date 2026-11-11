@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: profitbot-api
+    runtime: docker
+    rootDir: backend
+    healthCheckPath: /health
+    envVars:
+      - key: OWNER_API_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://your-owner-dashboard.example
