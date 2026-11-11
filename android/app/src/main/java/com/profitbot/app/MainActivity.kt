@@ -1,6 +1,8 @@
 package com.profitbot.app
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -84,7 +86,7 @@ fun ProfitBotApp() {
             try {
                 val summaryResponse = apiGet("/owner/summary", token)
                 if (summaryResponse.code !in 200..299) {
-                    runOnUiThread {
+                    Handler(Looper.getMainLooper()).post {
                         connectionMessage = when (summaryResponse.code) {
                             401 -> "رفض الخادم الرمز. تحقق من OWNER_API_TOKEN."
                             503 -> "رمز المالك غير مضبوط في إعدادات الخادم."
