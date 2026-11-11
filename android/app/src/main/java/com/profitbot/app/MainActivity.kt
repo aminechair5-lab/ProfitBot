@@ -100,7 +100,7 @@ fun ProfitBotApp() {
                 }
                 val productsResponse = apiGet("/products", token)
                 if (productsResponse.code !in 200..299) {
-                    runOnUiThread {
+                    Handler(Looper.getMainLooper()).post {
                         connectionMessage = "تم التحقق من الرمز، لكن تعذر جلب المنتجات (HTTP ${productsResponse.code})."
                         summaryJson = JSONObject(summaryResponse.body)
                         isLoading = false
@@ -110,14 +110,14 @@ fun ProfitBotApp() {
                 val summary = JSONObject(summaryResponse.body)
                 val array = JSONArray(productsResponse.body)
                 val products = (0 until array.length()).map { array.getJSONObject(it) }
-                runOnUiThread {
+                Handler(Looper.getMainLooper()).post {
                     summaryJson = summary
                     remoteProducts = products
                     connectionMessage = "متصل بالخادم بنجاح"
                     isLoading = false
                 }
             } catch (e: Exception) {
-                runOnUiThread {
+                Handler(Looper.getMainLooper()).post {
                     connectionMessage = "تعذر الاتصال: ${e.message ?: "خطأ غير معروف"}"
                     isLoading = false
                     summaryJson = null
