@@ -76,6 +76,9 @@ fun ProfitBotApp() {
     var isLoading by remember { mutableStateOf(false) }
     var summaryJson by remember { mutableStateOf<JSONObject?>(null) }
     var remoteProducts by remember { mutableStateOf(listOf<JSONObject>()) }
+    var trendSignals by remember { mutableStateOf(listOf<JSONObject>()) }
+    var trendMessage by remember { mutableStateOf("لم يتم جلب اتجاهات البحث بعد") }
+    var trendsLoading by remember { mutableStateOf(false) }
 
     fun connectToCloud() {
         val token = ownerToken.trim()
@@ -219,7 +222,58 @@ fun ProfitBotApp() {
                     item { Text("قاعدة القرار: لا نختار المنتج بسبب الترند وحده؛ يجب أن يجتاز هامش الربح والشحن والمخاطر.") }
                 }
                 "فرص المنتجات" -> {
-                    item { Text("Product Radar", style = MaterialTheme.typography.headlineSmall) }
+                    item { Text("رادار إشارات السوق", style = MaterialTheme.typography.headlineSmall) }
+                    item { Text("Google Trends يعرض اهتمام البحث، وليس بيانات مبيعات أو منتجات مؤكدة.") }
+                    item {
+                        Button(onClick = {
+                            val token = ownerToken.trim()
+                            if (token.isEmpty()) {
+                                trendMessage = "افتح اتصال الخادم وأدخل رمز المالك أولاً."
+                            } else if (!trendsLoading) {
+                                trendsLoading = true
+                                trendMessage = "جارٍ جلب إشارات البحث..."
+                                Thread {
+                                    try {
+                                        val response = apiGet("/signals/trends?geo=US", token)
+                                        val rows = if (response.code in 200..299) {
+                                            val arr = JSONObject(response.body).optJSONArray("items") ?: JSONArray()
+                                            (0 until arr.length()).map { arr.getJSONObject(it) }
+                                        } else emptyList()
+                                        Handler(Looper.getMainLooper()).post {
+                                            trendSignals = rows
+                                            trendMessage = if (response.code in 200..299)
+                                                "تم جلب ${rows.size} إشارة بحث."
+                                            else "تعذر الجلب: HTTP ${response.code}"
+                                            trendsLoading = false
+                                        }
+                                    } catch (e: Exception) {
+                                        Handler(Looper.getMainLooper()).post {
+                                            trendMessage = "خطأ: ${e.message ?: "تعذر الاتصال"}"
+                                            trendsLoading = false
+                                        }
+                                    }
+                                }.start()
+                            }
+                        }, enabled = !trendsLoading, modifier = Modifier.fillMaxWidth()) {
+                            if (trendsLoading) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.CloudDownload, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (trendsLoading) "جارٍ الجلب..." else "جلب اتجاهات البحث")
+                        }
+                    }
+                    item { Text(trendMessage, style = MaterialTheme.typography.bodySmall) }
+                    items(trendSignals) { signal ->
+                        Card {
+                            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text(signal.optString("title"), style = MaterialTheme.typography.titleMedium)
+                                Text("حركة بحث تقريبية: ${signal.optString("approx_traffic", "غير محددة")}")
+                                Text("المصدر: Google Trends • ليست مبيعات مؤكدة")
+                                Text(signal.optString("url"), style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    item { Text("يلزم التحقق من المورد والتكلفة والشحن والمنافسة قبل اعتماد أي فكرة.") }
+                    item { Text("عينات توضيحية قديمة", style = MaterialTheme.typography.titleMedium) }
                     item { Text("ترتيب تجريبي: الطلب 45% • انخفاض المنافسة 35% • هامش الربح 20%") }
                     items(opportunities.sortedByDescending { it.score }) { op ->
                         Card(onClick = { selected = op }) {
