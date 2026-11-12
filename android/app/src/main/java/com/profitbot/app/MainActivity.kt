@@ -235,14 +235,15 @@ fun ProfitBotApp() {
                                 Thread {
                                     try {
                                         val response = apiGet("/signals/trends?geo=US", token)
-                                        val rows = if (response.code in 200..299) {
-                                            val arr = JSONObject(response.body).optJSONArray("items") ?: JSONArray()
-                                            (0 until arr.length()).map { arr.getJSONObject(it) }
-                                        } else emptyList()
+                                        val payload = if (response.code in 200..299) JSONObject(response.body) else null
+                                        val arr = payload?.optJSONArray("items") ?: JSONArray()
+                                        val rows = (0 until arr.length()).map { arr.getJSONObject(it) }
+                                        val scanned = payload?.optInt("scanned_count", rows.size) ?: 0
+                                        val excluded = payload?.optInt("excluded_count", 0) ?: 0
                                         Handler(Looper.getMainLooper()).post {
                                             trendSignals = rows
                                             trendMessage = if (response.code in 200..299)
-                                                "تم جلب ${rows.size} إشارة بحث."
+                                                "فُحصت $scanned إشارة؛ بقيت ${rows.size} موضوعات بكلمات منتجات، واستُبعدت $excluded. ليست مبيعات مؤكدة."
                                             else "تعذر الجلب: HTTP ${response.code}"
                                             trendsLoading = false
                                         }
@@ -267,6 +268,9 @@ fun ProfitBotApp() {
                             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                 Text(signal.optString("title"), style = MaterialTheme.typography.titleMedium)
                                 Text("حركة بحث تقريبية: ${signal.optString("approx_traffic", "غير محددة")}")
+                                Text("كلمات المنتج المطابقة: " + (signal.optJSONArray("matched_product_terms")?.let { terms ->
+                                    (0 until terms.length()).joinToString(", ") { terms.optString(it) }
+                                } ?: "غير محددة"))
                                 Text("المصدر: Google Trends • ليست مبيعات مؤكدة")
                                 Text(signal.optString("url"), style = MaterialTheme.typography.bodySmall)
                             }
