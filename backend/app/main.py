@@ -49,7 +49,7 @@ def score_values(p: Product):
 
 @app.get("/signals/trends", dependencies=[Depends(require_owner)])
 def google_trend_signals(geo: str = "US"):
-    """Return public Google Trends RSS signals; these are search-interest hints, not product sales data."""
+    """Return product-keyword trend candidates, not verified product demand or sales."""
     import re
     import urllib.error
     import urllib.request
@@ -62,7 +62,7 @@ def google_trend_signals(geo: str = "US"):
     url = f"https://trends.google.com/trending/rss?geo={country}"
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "ProfitBot/0.6 (+https://github.com/aminechair5-lab/ProfitBot)", "Accept": "application/rss+xml, application/xml"}
+        headers={"User-Agent": "ProfitBot/0.7 (+https://github.com/aminechair5-lab/ProfitBot)", "Accept": "application/rss+xml, application/xml"}
     )
     try:
         with urllib.request.urlopen(request, timeout=12) as response:
@@ -71,28 +71,57 @@ def google_trend_signals(geo: str = "US"):
     except (urllib.error.URLError, TimeoutError, ET.ParseError) as exc:
         raise HTTPException(502, f"Google Trends feed unavailable: {str(exc)[:180]}")
 
+    # Conservative keyword screen: only keep topics containing recognizable
+    # physical-product or shopping terms. This reduces people/news topics but
+    # can miss product brands whose names do not include a product keyword.
+    product_terms = {
+        "phone", "iphone", "smartphone", "case", "charger", "charging", "headphones",
+        "earbuds", "speaker", "smartwatch", "watch", "laptop", "tablet", "keyboard",
+        "mouse", "monitor", "camera", "projector", "vacuum", "blender", "air fryer",
+        "skincare", "serum", "moisturizer", "sunscreen", "makeup", "perfume",
+        "shoes", "sneakers", "boots", "bag", "backpack", "wallet", "bottle",
+        "organizer", "lamp", "chair", "desk", "furniture", "mattress", "pillow",
+        "pet", "dog", "cat", "toy", "toys", "gaming", "controller", "console",
+        "fitness", "treadmill", "yoga", "clothing", "jacket", "shirt", "dress",
+        "jeans", "pants", "accessory", "accessories", "tool", "tools", "kitchen",
+        "cookware", "pan", "pot", "watch", "ring", "necklace", "bracelet"
+    }
     items = []
-    for item in root.findall(".//item")[:20]:
+    scanned_count = 0
+    for item in root.findall(".//item")[:40]:
+        scanned_count += 1
         fields = {child.tag.split("}")[-1]: (child.text or "").strip() for child in item}
+        title = fields.get("title", "")
+        words = set(re.findall(r"[a-z0-9]+", title.lower()))
+        matched_terms = sorted(words.intersection(product_terms))
+        if not matched_terms:
+            continue
         published = fields.get("pubDate")
         try:
             published_at = parsedate_to_datetime(published).isoformat() if published else None
         except (TypeError, ValueError):
             published_at = None
         items.append({
-            "title": fields.get("title", ""),
+            "title": title,
             "url": fields.get("link", ""),
             "published_at": published_at,
             "approx_traffic": fields.get("approx_traffic"),
             "source": "Google Trends Trending RSS",
             "signal_type": "search_interest",
-            "commercially_verified": False
+            "commercially_verified": False,
+            "commercial_candidate": True,
+            "matched_product_terms": matched_terms
         })
+        if len(items) >= 20:
+            break
     return {
         "source": "Google Trends Trending RSS",
         "geo": country,
+        "scanned_count": scanned_count,
         "count": len(items),
-        "warning": "Search interest is not proof of product demand or sales. Verify suppliers, prices, shipping, competition and legal requirements before listing.",
+        "excluded_count": scanned_count - len(items),
+        "filter": "Conservative product-keyword screen; some valid brand-only trends may be excluded.",
+        "warning": "These are product-related search-interest hints, not proof of demand, supplier availability, profit or sales. Verify supplier, total landed cost, shipping, competition, taxes and legal requirements before listing.",
         "items": items
     }
 
