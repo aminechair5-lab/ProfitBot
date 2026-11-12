@@ -48,8 +48,8 @@ def score_values(p: Product):
 
 
 @app.get("/signals/trends", dependencies=[Depends(require_owner)])
-def google_trend_signals(geo: str = "US"):
-    """Return product-keyword trend candidates, not verified product demand or sales."""
+def google_trend_signals(geo: str = "DZ"):
+    """Classify public trending searches as product-related candidates, never as verified sales."""
     import re
     import urllib.error
     import urllib.request
@@ -59,49 +59,98 @@ def google_trend_signals(geo: str = "US"):
     country = geo.upper().strip()
     if not re.fullmatch(r"[A-Z]{2}", country):
         raise HTTPException(400, "geo must be a two-letter country code")
+
     url = f"https://trends.google.com/trending/rss?geo={country}"
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "ProfitBot/0.7 (+https://github.com/aminechair5-lab/ProfitBot)", "Accept": "application/rss+xml, application/xml"}
+        headers={"User-Agent": "ProfitBot/0.8 (+https://github.com/aminechair5-lab/ProfitBot)", "Accept": "application/rss+xml, application/xml"}
     )
     try:
-        with urllib.request.urlopen(request, timeout=12) as response:
+        with urllib.request.urlopen(request, timeout=15) as response:
             payload = response.read(1_500_000)
         root = ET.fromstring(payload)
     except (urllib.error.URLError, TimeoutError, ET.ParseError) as exc:
         raise HTTPException(502, f"Google Trends feed unavailable: {str(exc)[:180]}")
 
-    # Conservative keyword screen: only keep topics containing recognizable
-    # physical-product or shopping terms. This reduces people/news topics but
-    # can miss product brands whose names do not include a product keyword.
-    product_terms = {
-        "phone", "iphone", "smartphone", "case", "charger", "charging", "headphones",
-        "earbuds", "speaker", "smartwatch", "watch", "laptop", "tablet", "keyboard",
-        "mouse", "monitor", "camera", "projector", "vacuum", "blender", "air fryer",
-        "skincare", "serum", "moisturizer", "sunscreen", "makeup", "perfume",
-        "shoes", "sneakers", "boots", "bag", "backpack", "wallet", "bottle",
-        "organizer", "lamp", "chair", "desk", "furniture", "mattress", "pillow",
-        "pet", "dog", "cat", "toy", "toys", "gaming", "controller", "console",
-        "fitness", "treadmill", "yoga", "clothing", "jacket", "shirt", "dress",
-        "jeans", "pants", "accessory", "accessories", "tool", "tools", "kitchen",
-        "cookware", "pan", "pot", "watch", "ring", "necklace", "bracelet"
+    # Phrase-aware catalog: avoids the previous bug where multiword terms such as
+    # "air fryer" could never match a token-by-token comparison.
+    product_catalog = {
+        "Electronics": ["iphone", "smartphone", "mobile phone", "phone case", "phone charger",
+            "wireless charger", "power bank", "headphones", "earbuds", "bluetooth speaker",
+            "smartwatch", "laptop", "tablet", "keyboard", "computer mouse", "monitor",
+            "digital camera", "projector", "gaming console", "game controller"],
+        "Home & Kitchen": ["air fryer", "coffee maker", "espresso machine", "vacuum cleaner",
+            "robot vacuum", "water bottle", "storage organizer", "drawer organizer",
+            "desk lamp", "led lamp", "office chair", "mattress", "pillow", "cookware",
+            "kitchen gadget", "blender", "frying pan", "pressure cooker"],
+        "Beauty & Personal Care": ["skin care", "skincare", "face serum", "moisturizer",
+            "sunscreen", "makeup", "hair dryer", "hair straightener", "electric shaver",
+            "perfume", "beauty device"],
+        "Fashion & Accessories": ["sneakers", "running shoes", "boots", "backpack",
+            "handbag", "wallet", "sunglasses", "smart ring", "jacket", "dress", "jeans",
+            "wristwatch", "necklace", "bracelet"],
+        "Sports & Fitness": ["yoga mat", "resistance bands", "dumbbells", "treadmill",
+            "fitness tracker", "waterproof bag", "camping tent", "hiking shoes"],
+        "Pet Supplies": ["pet carrier", "cat litter", "dog harness", "pet toy", "pet bed"],
+        "Toys & Gaming": ["lego set", "board game", "action figure", "toy", "gaming headset"]
     }
-    items = []
+    shopping_intent = ["buy", "best", "review", "price", "deal", "discount", "sale",
+        "where to buy", "versus", "vs"]
+    non_commercial = ["breaking news", "election", "president", "prime minister",
+        "football", "soccer", "basketball", "tennis", "cricket", "match result",
+        "live score", "weather", "earthquake", "war", "death", "obituary",
+        "celebrity", "actor", "actress", "singer", "concert", "movie", "film",
+        "tv series", "episode", "championship", "tournament"]
+
+    def classify(title: str):
+        normalized = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+        matched = []
+        categories = []
+        for category, terms in product_catalog.items():
+            category_hits = [term for term in terms
+                if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
+            if category_hits:
+                categories.append(category)
+                matched.extend(category_hits)
+        blocked = [term for term in non_commercial
+            if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
+        if not matched or blocked:
+            return None
+        intent_hits = [term for term in shopping_intent
+            if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
+        score = min(95, 58 + min(18, (len(matched) - 1) * 9) + min(15, len(intent_hits) * 5))
+        reasons = ["تطابق مع كلمات منتج معروفة"]
+        if len(matched) > 1:
+            reasons.append("أكثر من مصطلح منتج")
+        if intent_hits:
+            reasons.append("وجود نية شراء أو مقارنة")
+        confidence = "medium" if score >= 70 else "low"
+        return {
+            "category": categories[0],
+            "matched_product_terms": matched[:6],
+            "shopping_intent_terms": intent_hits,
+            "commercial_score": score,
+            "confidence": confidence,
+            "classification_reasons": reasons
+        }
+
+    candidates = []
     scanned_count = 0
-    for item in root.findall(".//item")[:40]:
+    rejected_count = 0
+    for item in root.findall(".//item")[:60]:
         scanned_count += 1
         fields = {child.tag.split("}")[-1]: (child.text or "").strip() for child in item}
         title = fields.get("title", "")
-        words = set(re.findall(r"[a-z0-9]+", title.lower()))
-        matched_terms = sorted(words.intersection(product_terms))
-        if not matched_terms:
+        classification = classify(title)
+        if not classification:
+            rejected_count += 1
             continue
         published = fields.get("pubDate")
         try:
             published_at = parsedate_to_datetime(published).isoformat() if published else None
         except (TypeError, ValueError):
             published_at = None
-        items.append({
+        candidates.append({
             "title": title,
             "url": fields.get("link", ""),
             "published_at": published_at,
@@ -110,19 +159,18 @@ def google_trend_signals(geo: str = "US"):
             "signal_type": "search_interest",
             "commercially_verified": False,
             "commercial_candidate": True,
-            "matched_product_terms": matched_terms
+            **classification
         })
-        if len(items) >= 20:
-            break
+    candidates.sort(key=lambda row: (row["commercial_score"], row.get("approx_traffic") or ""), reverse=True)
     return {
         "source": "Google Trends Trending RSS",
         "geo": country,
         "scanned_count": scanned_count,
-        "count": len(items),
-        "excluded_count": scanned_count - len(items),
-        "filter": "Conservative product-keyword screen; some valid brand-only trends may be excluded.",
-        "warning": "These are product-related search-interest hints, not proof of demand, supplier availability, profit or sales. Verify supplier, total landed cost, shipping, competition, taxes and legal requirements before listing.",
-        "items": items
+        "count": len(candidates[:20]),
+        "excluded_count": rejected_count,
+        "filter": "Phrase-aware product catalog plus shopping-intent and non-commercial topic checks.",
+        "warning": "النتائج إشارات بحث أولية فقط وليست دليلاً على المبيعات أو الربح. يلزم التحقق من المورد والسعر والشحن والرسوم والمنافسة والضرائب.",
+        "items": candidates[:20]
     }
 
 @app.get("/health")
