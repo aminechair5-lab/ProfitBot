@@ -46,6 +46,56 @@ def score_values(p: Product):
     )
     return round(score, 1), eligible, net, margin
 
+
+@app.get("/signals/trends", dependencies=[Depends(require_owner)])
+def google_trend_signals(geo: str = "US"):
+    """Return public Google Trends RSS signals; these are search-interest hints, not product sales data."""
+    import re
+    import urllib.error
+    import urllib.request
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    country = geo.upper().strip()
+    if not re.fullmatch(r"[A-Z]{2}", country):
+        raise HTTPException(400, "geo must be a two-letter country code")
+    url = f"https://trends.google.com/trending/rss?geo={country}"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "ProfitBot/0.6 (+https://github.com/aminechair5-lab/ProfitBot)", "Accept": "application/rss+xml, application/xml"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            payload = response.read(1_500_000)
+        root = ET.fromstring(payload)
+    except (urllib.error.URLError, TimeoutError, ET.ParseError) as exc:
+        raise HTTPException(502, f"Google Trends feed unavailable: {str(exc)[:180]}")
+
+    items = []
+    for item in root.findall(".//item")[:20]:
+        fields = {child.tag.split("}")[-1]: (child.text or "").strip() for child in item}
+        published = fields.get("pubDate")
+        try:
+            published_at = parsedate_to_datetime(published).isoformat() if published else None
+        except (TypeError, ValueError):
+            published_at = None
+        items.append({
+            "title": fields.get("title", ""),
+            "url": fields.get("link", ""),
+            "published_at": published_at,
+            "approx_traffic": fields.get("approx_traffic"),
+            "source": "Google Trends Trending RSS",
+            "signal_type": "search_interest",
+            "commercially_verified": False
+        })
+    return {
+        "source": "Google Trends Trending RSS",
+        "geo": country,
+        "count": len(items),
+        "warning": "Search interest is not proof of product demand or sales. Verify suppliers, prices, shipping, competition and legal requirements before listing.",
+        "items": items
+    }
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "0.4.0", "mode": "cloud-ready-starter", "live_integrations": False}
