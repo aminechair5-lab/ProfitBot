@@ -79,6 +79,13 @@ fun ProfitBotApp() {
     var trendSignals by remember { mutableStateOf(listOf<JSONObject>()) }
     var trendMessage by remember { mutableStateOf("لم يتم جلب اتجاهات البحث بعد") }
     var trendsLoading by remember { mutableStateOf(false) }
+    var trendGeo by remember { mutableStateOf("DZ") }
+    val trendCountries = listOf("DZ", "US", "GB", "FR", "DE", "CA", "AE", "SA", "TR")
+    val trendCountryNames = mapOf(
+        "DZ" to "الجزائر", "US" to "أمريكا", "GB" to "بريطانيا",
+        "FR" to "فرنسا", "DE" to "ألمانيا", "CA" to "كندا",
+        "AE" to "الإمارات", "SA" to "السعودية", "TR" to "تركيا"
+    )
 
     fun connectToCloud() {
         val token = ownerToken.trim()
@@ -225,6 +232,19 @@ fun ProfitBotApp() {
                     item { Text("رادار إشارات السوق", style = MaterialTheme.typography.headlineSmall) }
                     item { Text("Google Trends يعرض اهتمام البحث، وليس بيانات مبيعات أو منتجات مؤكدة.") }
                     item {
+                        OutlinedButton(
+                            onClick = {
+                                val current = trendCountries.indexOf(trendGeo).coerceAtLeast(0)
+                                trendGeo = trendCountries[(current + 1) % trendCountries.size]
+                                trendSignals = emptyList()
+                                trendMessage = "بلد البحث: ${trendCountryNames[trendGeo]} — اضغط جلب اتجاهات البحث."
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("بلد البحث: ${trendCountryNames[trendGeo]} • تغيير البلد")
+                        }
+                    }
+                    item {
                         Button(onClick = {
                             val token = ownerToken.trim()
                             if (token.isEmpty()) {
@@ -234,7 +254,7 @@ fun ProfitBotApp() {
                                 trendMessage = "جارٍ جلب إشارات البحث..."
                                 Thread {
                                     try {
-                                        val response = apiGet("/signals/trends?geo=US", token)
+                                        val response = apiGet("/signals/trends?geo=$trendGeo", token)
                                         val payload = if (response.code in 200..299) JSONObject(response.body) else null
                                         val arr = payload?.optJSONArray("items") ?: JSONArray()
                                         val rows = (0 until arr.length()).map { arr.getJSONObject(it) }
@@ -267,10 +287,14 @@ fun ProfitBotApp() {
                         Card {
                             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                 Text(signal.optString("title"), style = MaterialTheme.typography.titleMedium)
-                                Text("حركة بحث تقريبية: ${signal.optString("approx_traffic", "غير محددة")}")
-                                Text("كلمات المنتج المطابقة: " + (signal.optJSONArray("matched_product_terms")?.let { terms ->
+                                Text("الفئة: ${signal.optString("category", "غير محددة")} • التقييم التجاري الأولي: ${signal.optInt("commercial_score")}/100")
+                                Text("الثقة: ${if (signal.optString("confidence") == "medium") "متوسطة" else "منخفضة"} • حركة البحث: ${signal.optString("approx_traffic", "غير محددة")}")
+                                Text("كلمات المنتج: " + (signal.optJSONArray("matched_product_terms")?.let { terms ->
                                     (0 until terms.length()).joinToString(", ") { terms.optString(it) }
                                 } ?: "غير محددة"))
+                                Text("أسباب التصنيف: " + (signal.optJSONArray("classification_reasons")?.let { reasons ->
+                                    (0 until reasons.length()).joinToString(" • ") { reasons.optString(it) }
+                                } ?: "تطابق كلمات منتج"))
                                 Text("المصدر: Google Trends • ليست مبيعات مؤكدة")
                                 Text(signal.optString("url"), style = MaterialTheme.typography.bodySmall)
                             }
