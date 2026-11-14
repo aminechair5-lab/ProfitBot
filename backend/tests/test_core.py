@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from pydantic import ValidationError
 from app.main import score_values
+from app.db import normalize_database_url
 from app.schemas import ProductCreate, ApprovalCreate, ApprovalDecision
 
 
@@ -31,6 +32,15 @@ class ProductScoringTests(unittest.TestCase):
         self.assertFalse(eligible)
         self.assertEqual(net, 0)
         self.assertEqual(margin, 0)
+
+
+class DatabaseConfigurationTests(unittest.TestCase):
+    def test_legacy_postgres_url_is_normalized(self):
+        self.assertEqual(normalize_database_url("postgres://user:pass@host/db"), "postgresql://user:pass@host/db")
+
+    def test_modern_postgres_url_is_unchanged(self):
+        url = "postgresql://user:pass@host/db"
+        self.assertEqual(normalize_database_url(url), url)
 
 
 class RequestSchemaTests(unittest.TestCase):
