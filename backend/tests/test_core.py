@@ -36,11 +36,11 @@ class ProductScoringTests(unittest.TestCase):
 
 class DatabaseConfigurationTests(unittest.TestCase):
     def test_legacy_postgres_url_is_normalized(self):
-        self.assertEqual(normalize_database_url("postgres://user:pass@host/db"), "postgresql://user:pass@host/db")
+        self.assertEqual(normalize_database_url("postgres://user:pass@host/db"), "postgresql+psycopg://user:pass@host/db")
 
-    def test_modern_postgres_url_is_unchanged(self):
-        url = "postgresql+psycopg://user:pass@host/db"
-        self.assertEqual(normalize_database_url(url), url)
+    def test_modern_postgres_url_is_normalized(self):
+        url = "postgresql://user:pass@host/db"
+        self.assertEqual(normalize_database_url(url), "postgresql+psycopg://user:pass@host/db")
 
 
 class RequestSchemaTests(unittest.TestCase):
