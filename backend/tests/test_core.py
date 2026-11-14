@@ -39,7 +39,7 @@ class DatabaseConfigurationTests(unittest.TestCase):
         self.assertEqual(normalize_database_url("postgres://user:pass@host/db"), "postgresql://user:pass@host/db")
 
     def test_modern_postgres_url_is_unchanged(self):
-        url = "postgresql://user:pass@host/db"
+        url = "postgresql+psycopg://user:pass@host/db"
         self.assertEqual(normalize_database_url(url), url)
 
 
