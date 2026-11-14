@@ -5,7 +5,7 @@ from .config import settings
 
 def normalize_database_url(url: str) -> str:
     # Some managed Postgres providers still expose the legacy postgres:// scheme.
-    return "postgresql://" + url[len("postgres://"):] if url.startswith("postgres://") else url
+    if url.startswith("postgres://"):\n        return "postgresql+psycopg://" + url[len("postgres://"):]\n    if url.startswith("postgresql://"):\n        return "postgresql+psycopg://" + url[len("postgresql://"):]\n    return url
 
 
 DATABASE_URL = normalize_database_url(settings.database_url)
