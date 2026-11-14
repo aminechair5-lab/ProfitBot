@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.responses import HTMLResponse
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func
@@ -172,6 +174,12 @@ def google_trend_signals(geo: str = "DZ"):
         "warning": "النتائج إشارات بحث أولية فقط وليست دليلاً على المبيعات أو الربح. يلزم التحقق من المورد والسعر والشحن والرسوم والمنافسة والضرائب.",
         "items": candidates[:20]
     }
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    page = Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
+    return HTMLResponse(content=page)
 
 @app.get("/health")
 def health():
