@@ -4,7 +4,7 @@ from fastapi.responses import HTMLResponse
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
 from .models import Product, Approval, AuditEvent
@@ -12,7 +12,7 @@ from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision
 from .security import require_owner
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="ProfitBot Cloud API", version="0.4.0")
+app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -183,7 +183,23 @@ def dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.4.0", "mode": "cloud-ready-starter", "live_integrations": False}
+    # Verify the database as well as the web process before reporting readiness.
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {type(exc).__name__}")
+    database_backend = "postgresql" if engine.dialect.name == "postgresql" else engine.dialect.name
+    persistent_storage = database_backend == "postgresql"
+    return {
+        "status": "ok",
+        "version": "0.5.0",
+        "mode": "cloud-ready",
+        "database": database_backend,
+        "storage_persistent": persistent_storage,
+        "storage_note": "PostgreSQL configured" if persistent_storage else "SQLite is suitable for local testing; hosted ephemeral filesystems may lose data on restart or redeploy.",
+        "live_integrations": False
+    }
 
 @app.get("/owner/summary", dependencies=[Depends(require_owner)])
 def owner_summary(db: Session = Depends(get_db)):
@@ -197,7 +213,9 @@ def owner_summary(db: Session = Depends(get_db)):
         "monthly_net_profit": None,
         "monthly_net_profit_note": "No verified sales data connected yet",
         "target_monthly_profit_usd": 100,
-        "live_integrations": False
+        "live_integrations": False,
+        "database": "postgresql" if engine.dialect.name == "postgresql" else engine.dialect.name,
+        "storage_persistent": engine.dialect.name == "postgresql"
     }
 
 @app.get("/products", dependencies=[Depends(require_owner)])
