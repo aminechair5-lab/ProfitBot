@@ -6,6 +6,11 @@ on:
     paths:
       - ".github/workflows/render-public-smoke.yml"
       - "backend/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/render-public-smoke.yml"
+      - "backend/**"
   workflow_dispatch:
 
 permissions:
@@ -23,7 +28,7 @@ jobs:
         run: |
           status="000"
           for attempt in $(seq 1 12); do
-            status=$(curl --silent --show-error --max-time 20 \
+            status=$(curl --silent --show-error --connect-timeout 5 --max-time 12 \
               --dump-header response-headers.txt \
               --output health.json \
               --write-out "%{http_code}" \
@@ -32,7 +37,7 @@ jobs:
             if [ "$status" = "200" ]; then
               break
             fi
-            sleep 15
+            sleep 8
           done
           echo "--- response headers ---"
           cat response-headers.txt || true
