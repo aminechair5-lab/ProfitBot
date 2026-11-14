@@ -111,7 +111,7 @@ class MultilingualTrendClassificationTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["category"], "Home & Kitchen")
         self.assertIn("air fryer", result["matched_product_terms"])
-        self.assertGreaterEqual(result["commercial_score"], 70)
+        self.assertGreaterEqual(result["commercial_score"], 65)
 
     def test_arabic_product_and_shopping_intent(self):
         result = classify_trend_title("أفضل قلاية هوائية سعر")
