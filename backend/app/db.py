@@ -4,8 +4,12 @@ from .config import settings
 
 
 def normalize_database_url(url: str) -> str:
-    # Some managed Postgres providers still expose the legacy postgres:// scheme.
-    if url.startswith("postgres://"):\n        return "postgresql+psycopg://" + url[len("postgres://"):]\n    if url.startswith("postgresql://"):\n        return "postgresql+psycopg://" + url[len("postgresql://"):]\n    return url
+    # SQLAlchemy needs the psycopg 3 dialect because psycopg2 is not installed.
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
 
 
 DATABASE_URL = normalize_database_url(settings.database_url)
