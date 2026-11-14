@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from app.main import score_values
 from app.db import normalize_database_url
 from app.schemas import ProductCreate, ApprovalCreate, ApprovalDecision
+from app.trends import classify_trend_title
 
 
 class ProductScoringTests(unittest.TestCase):
@@ -102,6 +103,38 @@ class RequestSchemaTests(unittest.TestCase):
     def test_decision_is_limited_to_approve_or_reject(self):
         with self.assertRaises(ValidationError):
             ApprovalDecision(decision="execute")
+
+
+class MultilingualTrendClassificationTests(unittest.TestCase):
+    def test_english_multiword_product_phrase(self):
+        result = classify_trend_title("best air fryer price")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["category"], "Home & Kitchen")
+        self.assertIn("air fryer", result["matched_product_terms"])
+        self.assertGreaterEqual(result["commercial_score"], 70)
+
+    def test_arabic_product_and_shopping_intent(self):
+        result = classify_trend_title("أفضل قلاية هوائية سعر")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["category"], "Home & Kitchen")
+        self.assertIn("قلاية هوائية", result["matched_product_terms"])
+        self.assertIn("أفضل", result["shopping_intent_terms"])
+
+    def test_french_product_and_shopping_intent(self):
+        result = classify_trend_title("meilleur prix cafetière")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["category"], "Home & Kitchen")
+        self.assertIn("cafetière", result["matched_product_terms"])
+        self.assertIn("prix", result["shopping_intent_terms"])
+
+    def test_non_commercial_topic_is_excluded(self):
+        self.assertIsNone(classify_trend_title("مباراة كرة القدم اليوم"))
+        self.assertIsNone(classify_trend_title("football match result"))
+
+    def test_product_phrase_inside_longer_text_is_matched(self):
+        result = classify_trend_title("où acheter un aspirateur robot")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["category"], "Home & Kitchen")
 
 
 if __name__ == "__main__":
