@@ -10,6 +10,7 @@ from .db import Base, engine, get_db
 from .models import Product, Approval, AuditEvent
 from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision
 from .security import require_owner
+from .trends import classify_trend_title
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
@@ -74,68 +75,6 @@ def google_trend_signals(geo: str = "DZ"):
     except (urllib.error.URLError, TimeoutError, ET.ParseError) as exc:
         raise HTTPException(502, f"Google Trends feed unavailable: {str(exc)[:180]}")
 
-    # Phrase-aware catalog: avoids the previous bug where multiword terms such as
-    # "air fryer" could never match a token-by-token comparison.
-    product_catalog = {
-        "Electronics": ["iphone", "smartphone", "mobile phone", "phone case", "phone charger",
-            "wireless charger", "power bank", "headphones", "earbuds", "bluetooth speaker",
-            "smartwatch", "laptop", "tablet", "keyboard", "computer mouse", "monitor",
-            "digital camera", "projector", "gaming console", "game controller"],
-        "Home & Kitchen": ["air fryer", "coffee maker", "espresso machine", "vacuum cleaner",
-            "robot vacuum", "water bottle", "storage organizer", "drawer organizer",
-            "desk lamp", "led lamp", "office chair", "mattress", "pillow", "cookware",
-            "kitchen gadget", "blender", "frying pan", "pressure cooker"],
-        "Beauty & Personal Care": ["skin care", "skincare", "face serum", "moisturizer",
-            "sunscreen", "makeup", "hair dryer", "hair straightener", "electric shaver",
-            "perfume", "beauty device"],
-        "Fashion & Accessories": ["sneakers", "running shoes", "boots", "backpack",
-            "handbag", "wallet", "sunglasses", "smart ring", "jacket", "dress", "jeans",
-            "wristwatch", "necklace", "bracelet"],
-        "Sports & Fitness": ["yoga mat", "resistance bands", "dumbbells", "treadmill",
-            "fitness tracker", "waterproof bag", "camping tent", "hiking shoes"],
-        "Pet Supplies": ["pet carrier", "cat litter", "dog harness", "pet toy", "pet bed"],
-        "Toys & Gaming": ["lego set", "board game", "action figure", "toy", "gaming headset"]
-    }
-    shopping_intent = ["buy", "best", "review", "price", "deal", "discount", "sale",
-        "where to buy", "versus", "vs"]
-    non_commercial = ["breaking news", "election", "president", "prime minister",
-        "football", "soccer", "basketball", "tennis", "cricket", "match result",
-        "live score", "weather", "earthquake", "war", "death", "obituary",
-        "celebrity", "actor", "actress", "singer", "concert", "movie", "film",
-        "tv series", "episode", "championship", "tournament"]
-
-    def classify(title: str):
-        normalized = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
-        matched = []
-        categories = []
-        for category, terms in product_catalog.items():
-            category_hits = [term for term in terms
-                if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
-            if category_hits:
-                categories.append(category)
-                matched.extend(category_hits)
-        blocked = [term for term in non_commercial
-            if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
-        if not matched or blocked:
-            return None
-        intent_hits = [term for term in shopping_intent
-            if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
-        score = min(95, 58 + min(18, (len(matched) - 1) * 9) + min(15, len(intent_hits) * 5))
-        reasons = ["تطابق مع كلمات منتج معروفة"]
-        if len(matched) > 1:
-            reasons.append("أكثر من مصطلح منتج")
-        if intent_hits:
-            reasons.append("وجود نية شراء أو مقارنة")
-        confidence = "medium" if score >= 70 else "low"
-        return {
-            "category": categories[0],
-            "matched_product_terms": matched[:6],
-            "shopping_intent_terms": intent_hits,
-            "commercial_score": score,
-            "confidence": confidence,
-            "classification_reasons": reasons
-        }
-
     candidates = []
     scanned_count = 0
     rejected_count = 0
@@ -143,7 +82,7 @@ def google_trend_signals(geo: str = "DZ"):
         scanned_count += 1
         fields = {child.tag.split("}")[-1]: (child.text or "").strip() for child in item}
         title = fields.get("title", "")
-        classification = classify(title)
+        classification = classify_trend_title(title)
         if not classification:
             rejected_count += 1
             continue
