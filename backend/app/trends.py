@@ -83,12 +83,12 @@ NON_COMMERCIAL = [
 
 
 def _contains_phrase(text: str, phrase: str) -> bool:
-    return bool(re.search(r"(?<!\\w)" + re.escape(phrase) + r"(?!\\w)", text))
+    return bool(re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text))
 
 
 def classify_trend_title(title: str):
     """Return a multilingual product-candidate classification or None."""
-    normalized = re.sub(r"[^\\w]+", " ", title.casefold(), flags=re.UNICODE).strip()
+    normalized = re.sub(r"[^\w]+", " ", title.casefold(), flags=re.UNICODE).strip()
     matched = []
     categories = []
     for category, terms in PRODUCT_CATALOG.items():
