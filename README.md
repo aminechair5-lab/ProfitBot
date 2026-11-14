@@ -46,7 +46,7 @@ Open `http://127.0.0.1:8000/` and enter the owner token. API documentation is at
 
 SQLite is convenient for local development. On an ephemeral hosted filesystem, SQLite data can be lost on restart or redeploy. Do not enter real business data until durable PostgreSQL storage is configured and verified.
 
-## Automated checks
+## Launch checklist\nSee [Arabic launch checklist](LAUNCH_CHECKLIST_AR.md) for the manual go/no-go checks before the planned trial.\n\n## Automated checks
 GitHub Actions compiles Python modules, runs unit tests and checks dashboard JavaScript syntax. Passing CI does not prove the public Render route, database persistence or third-party integrations work.
 
 ## Security
