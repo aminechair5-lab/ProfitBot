@@ -1,0 +1,57 @@
+name: Render public smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/render-public-smoke.yml"
+      - "backend/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check public health endpoint with retries
+        env:
+          BASE_URL: https://profitbot-484w.onrender.com
+        shell: bash
+        run: |
+          status="000"
+          for attempt in $(seq 1 12); do
+            status=$(curl --silent --show-error --max-time 20 \
+              --dump-header response-headers.txt \
+              --output health.json \
+              --write-out "%{http_code}" \
+              "$BASE_URL/health" || true)
+            echo "Attempt $attempt: HTTP $status"
+            if [ "$status" = "200" ]; then
+              break
+            fi
+            sleep 15
+          done
+          echo "--- response headers ---"
+          cat response-headers.txt || true
+          echo "--- response body ---"
+          cat health.json || true
+          test "$status" = "200"
+          python - <<'PY'
+          import json
+          with open("health.json", encoding="utf-8") as f:
+              data = json.load(f)
+          assert data.get("status") == "ok", data
+          assert data.get("version"), data
+          print("Health payload:", json.dumps(data, ensure_ascii=False))
+          PY
+      - name: Check public dashboard route
+        env:
+          BASE_URL: https://profitbot-484w.onrender.com
+        run: |
+          curl --fail --silent --show-error --max-time 30 "$BASE_URL/" -o dashboard.html
+          grep -q "ProfitBot" dashboard.html
+          grep -q 'dir="rtl"' dashboard.html
+          echo "Public Arabic dashboard returned successfully."
