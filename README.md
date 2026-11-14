@@ -5,7 +5,7 @@ owner authentication, persistent data models, product scoring, approval queue an
 It intentionally contains no live payment, supplier purchase, auto-publishing, or trading actions.
 
 ## Architecture
-- Android app: owner dashboard client (the previous v0.3 Android project is retained under `android/`).
+- Web dashboard: Arabic RTL owner console served by the FastAPI app at `/` and `/dashboard`; includes product scoring, country trend signals, approvals and audit history. It uses the same-origin API and keeps the bearer token in page memory only.\n- Android app: owner dashboard client (the previous v0.3 Android project is retained under `android/`).
 - Backend: FastAPI.
 - Database: SQLite for local development; PostgreSQL via `DATABASE_URL` for cloud deployment.
 - Owner access: bearer token stored only as a server environment secret.
@@ -42,7 +42,7 @@ Do not paste API secrets into Android source code or chat.
 server URL + owner token connection screen using Android Keystore-backed storage, then call the API over HTTPS.
 This v0.4 bundle does not yet embed a token or connect the app to a live cloud host.
 
-## API overview
+## Web dashboard\nAfter starting the backend, open `http://127.0.0.1:8000/`. Sign in with the server-side `OWNER_API_TOKEN`. The dashboard supports product creation and rescoring, Google Trends RSS candidate discovery by country, approval requests and decisions, and audit history. A recorded approval is not an executed transaction.\n\n## API overview
 - `GET /health` — public health check
 - `GET /owner/summary` — owner dashboard summary
 - `GET /products` — list product candidates
@@ -56,7 +56,7 @@ This v0.4 bundle does not yet embed a token or connect the app to a live cloud h
 Approving a request only changes its status and writes an audit event. It does NOT perform the underlying purchase, payment, publication, or transfer.
 A real action executor must be implemented later with provider-specific APIs, explicit per-action confirmation, idempotency, spending limits, and rollback/reconciliation.
 
-## Security checklist before production
+## Automated checks\nGitHub Actions runs Python compilation and backend unit tests on pushes to `main` / `feature/web-dashboard-v1` and pull requests targeting `main`. These checks do not replace live deployment and end-to-end testing.\n\n## Security checklist before production
 - Use HTTPS only.
 - Generate a high-entropy owner token and rotate it if exposed.
 - Prefer proper user login/OAuth and short-lived tokens before multi-device production use.
