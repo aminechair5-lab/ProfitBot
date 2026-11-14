@@ -49,13 +49,55 @@ class RequestSchemaTests(unittest.TestCase):
         self.assertEqual(product.target_market, "Global - validate per country")
         self.assertEqual(product.supplier_cost, 0)
 
+    def test_product_name_is_trimmed(self):
+        product = ProductCreate(name="  Sample item  ")
+        self.assertEqual(product.name, "Sample item")
+
+    def test_product_rejects_blank_name(self):
+        with self.assertRaises(ValidationError):
+            ProductCreate(name="   ")
+
     def test_product_rejects_negative_cost(self):
         with self.assertRaises(ValidationError):
             ProductCreate(name="Sample item", supplier_cost=-1)
 
+    def test_product_rejects_non_finite_cost(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValidationError):
+                    ProductCreate(name="Sample item", supplier_cost=value)
+
+    def test_product_rejects_non_http_source_url(self):
+        for value in ("javascript:alert(1)", "file:///etc/passwd", "not-a-url"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValidationError):
+                    ProductCreate(name="Sample item", source_url=value)
+
+    def test_product_rejects_embedded_url_credentials(self):
+        with self.assertRaises(ValidationError):
+            ProductCreate(name="Sample item", source_url="https://user:password@example.com/item")
+
+    def test_product_accepts_http_source_url(self):
+        product = ProductCreate(name="Sample item", source_url="https://example.com/item")
+        self.assertEqual(product.source_url, "https://example.com/item")
+
+    def test_product_rejects_oversized_database_fields(self):
+        with self.assertRaises(ValidationError):
+            ProductCreate(name="Sample item", category="x" * 101)
+        with self.assertRaises(ValidationError):
+            ProductCreate(name="Sample item", target_market="x" * 101)
+
     def test_approval_requires_supported_action(self):
         with self.assertRaises(ValidationError):
             ApprovalCreate(action_type="execute_everything", description="Unsupported action")
+
+    def test_approval_rejects_non_finite_amount(self):
+        with self.assertRaises(ValidationError):
+            ApprovalCreate(action_type="payment", description="Test payment", amount=float("inf"))
+
+    def test_approval_currency_must_be_uppercase_code(self):
+        with self.assertRaises(ValidationError):
+            ApprovalCreate(action_type="payment", description="Test payment", currency="usd")
 
     def test_decision_is_limited_to_approve_or_reject(self):
         with self.assertRaises(ValidationError):
