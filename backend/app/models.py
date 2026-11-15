@@ -85,3 +85,24 @@ class SupplierOffer(Base):
     verification_status: Mapped[str] = mapped_column(String(30), default="unverified")
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CustomerOrder(Base):
+    __tablename__ = "customer_orders"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    order_ref: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    product_name: Mapped[str] = mapped_column(String(180))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price: Mapped[float] = mapped_column(Float)
+    total_amount: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    customer_name: Mapped[str] = mapped_column(String(180))
+    customer_email: Mapped[str] = mapped_column(String(254), index=True)
+    destination_country: Mapped[str] = mapped_column(String(2))
+    shipping_address: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending_payment", index=True)
+    payment_reference: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    tracking_number: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
