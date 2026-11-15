@@ -33,7 +33,7 @@ def supplier_offer_is_usable(db: Session, offer: SupplierOffer, market: str) -> 
     market = market.strip().upper()
     if not market or market == "DZ" or offer.verification_status != "verified":
         return False
-    if offer.stock_status != "in_stock" or offer.shipping_cost is None:
+    if offer.stock_status != "in_stock" or offer.shipping_cost is None or not offer.supplier_sku:
         return False
     if offer.shipping_days_min is None or offer.shipping_days_max is None:
         return False
