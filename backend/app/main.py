@@ -858,6 +858,9 @@ def update_customer_order(order_id: int, data: OrderStatusUpdate, db: Session = 
         order.tracking_number = data.tracking_number
     order.updated_at = datetime.now(timezone.utc)
     audit(db, "order_status_updated", "order", order.order_ref, f"status={order.status}")
+    notify_customer(db, order, "order_status_" + order.status,
+                    "ProfitBot order update",
+                    f"Your order {order.order_ref} status is now {order.status}.")
     db.commit()
     return {"order_ref": order.order_ref, "status": order.status}
 
