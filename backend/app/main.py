@@ -1099,6 +1099,8 @@ def create_cj_supplier_order(order_id: int, data: CJOrderCreate, db: Session = D
     live_enabled = os.getenv("CJ_LIVE_ORDER_CREATION", "false").lower() == "true"
     if data.confirm_live_creation and not live_enabled:
         raise HTTPException(409, "Live CJ order creation is disabled on the server; sandbox mode remains active")
+    if fulfillment.status == "sandbox_created" and not data.confirm_live_creation:
+        raise HTTPException(409, "A CJ sandbox order already exists. Do not create duplicates; use explicit live confirmation only after enabling production.")
     payload = {
         "orderNumber": order.order_ref,
         "shippingZip": data.shipping_zip,
@@ -1180,6 +1182,12 @@ def register_shipment_tracking(data: TrackingRegistration, db: Session = Depends
         raise HTTPException(404, "Order not found")
     if order.status not in {"supplier_ordered", "shipped"}:
         raise HTTPException(409, "Mark the supplier order as placed before registering shipment tracking")
+    existing_tracking = db.scalar(select(ShipmentTracking).where(ShipmentTracking.tracking_number == data.tracking_number))
+    if existing_tracking:
+        if existing_tracking.order_ref == order.order_ref:
+            return {"order_ref": order.order_ref, "status": order.status,
+                    "tracking_number": existing_tracking.tracking_number, "idempotent": True}
+        raise HTTPException(409, "This tracking number is already assigned to another order")
     if not tracking_configured():
         raise HTTPException(503, "17TRACK API key is not configured")
     try:
