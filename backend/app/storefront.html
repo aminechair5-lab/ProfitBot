@@ -50,7 +50,8 @@ $("orderForm").addEventListener("submit",async e=>{e.preventDefault();$("orderMe
  const base=location.origin+"/store", checkout=await fetch("/payments/paypal/create-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({order_ref:d.order_ref,return_url:base+"?paypal_return=1&order_ref="+encodeURIComponent(d.order_ref),cancel_url:base+"?paypal_cancel=1&order_ref="+encodeURIComponent(d.order_ref)})});
  const payment=await checkout.json();if(checkout.ok&&payment.approval_url){$("orderMessage").textContent+=(lang==="ar"?" جارٍ تحويلك إلى PayPal لإتمام الدفع الاختياري…":" Redirecting to PayPal for your checkout…");location.href=payment.approval_url}else{$("orderMessage").textContent+=(lang==="ar"?" الدفع الإلكتروني غير مفعّل حالياً؛ لم يتم خصم أي مبلغ.":" Online checkout is not enabled yet; no money was charged.")}
  }catch(err){$("orderMessage").textContent=err.message}});
-if(new URLSearchParams(location.search).get("paypal_cancel")==="1"){$("orderMessage").textContent=lang==="ar"?"ألغيت عملية الدفع. لم يتم خصم أي مبلغ.":"Checkout was cancelled. No money was charged.";history.replaceState({},document.title,"/store")}
+async function cancelReturnedPayPalOrder(){const params=new URLSearchParams(location.search),orderRef=params.get("order_ref"),paypalId=params.get("token");if(params.get("paypal_cancel")!=="1")return;if(orderRef&&paypalId){try{await fetch("/payments/paypal/cancel",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({order_ref:orderRef,paypal_order_id:paypalId})})}catch(e){}}$("orderMessage").textContent=lang==="ar"?"ألغيت عملية الدفع. لم يتم خصم أي مبلغ ويمكنك إعادة المحاولة.":"Checkout was cancelled. No money was charged; you can try again.";history.replaceState({},document.title,"/store")}
+cancelReturnedPayPalOrder();
 captureReturnedPayPalOrder();
 load();
 </script></body></html>
