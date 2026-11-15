@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 import hashlib
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal
-from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate
+from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal, PaymentAttempt, SupplierFulfillment, ShipmentTracking, NotificationLog
+from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate
 from .security import require_owner
 from .product_sources import discover_product_articles, MARKET_LOCALES, normalize
+from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
@@ -26,6 +27,46 @@ app.add_middleware(
 
 def audit(db: Session, event_type: str, entity_type: str, entity_id: str, detail: str = ""):
     db.add(AuditEvent(event_type=event_type, entity_type=entity_type, entity_id=str(entity_id), detail=detail))
+
+
+def verified_supplier_offer(db: Session, product_id: int, market: str):
+    """Return only a recently checked, in-stock offer from a verified supplier."""
+    market = market.strip().upper()
+    if not market or market == "DZ":
+        return None
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    rows = db.scalars(
+        select(SupplierOffer).join(Supplier, Supplier.id == SupplierOffer.supplier_id).where(
+            SupplierOffer.product_id == product_id,
+            SupplierOffer.verification_status == "verified",
+            SupplierOffer.stock_status == "in_stock",
+            SupplierOffer.shipping_cost.is_not(None),
+            SupplierOffer.shipping_days_min.is_not(None),
+            SupplierOffer.shipping_days_max.is_not(None),
+            SupplierOffer.checked_at >= cutoff,
+            Supplier.verification_status == "verified",
+        ).order_by(desc(SupplierOffer.checked_at))
+    ).all()
+    for offer in rows:
+        destinations = {part.strip().upper() for part in offer.destination_markets.replace(";", ",").split(",")}
+        if market in destinations:
+            return offer
+    return None
+
+
+def notify_customer(db: Session, order: CustomerOrder, event_type: str, subject: str, body: str):
+    status = "disabled"
+    detail = "SMTP is not configured"
+    try:
+        send_email_notification(recipient=order.customer_email, subject=subject, body=body)
+        status, detail = "sent", "SMTP accepted the message"
+    except ProviderNotConfigured as exc:
+        detail = str(exc)
+    except Exception as exc:
+        status, detail = "failed", type(exc).__name__
+    db.add(NotificationLog(order_ref=order.order_ref, event_type=event_type,
+                           channel="email", recipient=order.customer_email,
+                           status=status, detail=detail[:500]))
 
 def profit_values(p: Product):
     fees = p.selling_price * (p.platform_fee_pct + p.payment_fee_pct + p.returns_reserve_pct) / 100
@@ -667,6 +708,45 @@ def list_supplier_offers(supplier_id: int | None = None, product_id: int | None 
         "data_source": row.data_source, "verification_status": row.verification_status,
         "checked_at": row.checked_at
     } for row in rows]
+
+
+
+@app.post("/suppliers/{supplier_id}/verify", dependencies=[Depends(require_owner)])
+def verify_supplier(supplier_id: int, data: SupplierVerification, db: Session = Depends(get_db)):
+    supplier = db.get(Supplier, supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Supplier not found")
+    supplier.verification_status = "verified"
+    supplier.reliability_score = data.reliability_score
+    supplier.notes = (supplier.notes + "\\nVerification evidence: " + data.evidence_url + "\\n" + data.evidence_note).strip()
+    audit(db, "supplier_verified", "supplier", supplier.id,
+          f"reliability={data.reliability_score}; evidence={data.evidence_url}")
+    db.commit()
+    return {"id": supplier.id, "verification_status": supplier.verification_status,
+            "reliability_score": supplier.reliability_score}
+
+
+@app.post("/supplier-offers/{offer_id}/verify", dependencies=[Depends(require_owner)])
+def verify_supplier_offer(offer_id: int, data: SupplierOfferVerification, db: Session = Depends(get_db)):
+    offer = db.get(SupplierOffer, offer_id)
+    if not offer:
+        raise HTTPException(404, "Supplier offer not found")
+    supplier = db.get(Supplier, offer.supplier_id)
+    if not supplier or supplier.verification_status != "verified":
+        raise HTTPException(409, "Verify the supplier with evidence before verifying an offer")
+    if offer.stock_status != "in_stock" or offer.shipping_cost is None:
+        raise HTTPException(409, "Offer must have confirmed in-stock status and a shipping cost")
+    if offer.shipping_days_min is None or offer.shipping_days_max is None:
+        raise HTTPException(409, "A confirmed delivery-time range is required")
+    if not offer.product_id:
+        raise HTTPException(409, "Link the offer to a ProfitBot product before verification")
+    offer.verification_status = "verified"
+    offer.checked_at = datetime.now(timezone.utc)
+    audit(db, "supplier_offer_verified", "supplier_offer", offer.id,
+          f"evidence={data.evidence_url}; note={data.evidence_note}")
+    db.commit()
+    return {"id": offer.id, "verification_status": offer.verification_status,
+            "checked_at": offer.checked_at, "expires_in_hours": 24}
 
 
 @app.post("/products/{product_id}/publish", dependencies=[Depends(require_owner)])
