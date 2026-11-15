@@ -14,6 +14,8 @@ class ProductScoringTests(unittest.TestCase):
             platform_fee_pct=5, payment_fee_pct=3, returns_reserve_pct=2,
             demand_score=80, competition_score=30, supplier_reliability=80,
             shipping_score=70, marketing_fit=90,
+            target_market="US", supplier_name="Verified sample supplier",
+            source_url="https://example.com/sample-product",
         )
         score, eligible, net, margin = score_values(product)
         self.assertEqual(net, 50.0)

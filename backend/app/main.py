@@ -32,6 +32,37 @@ def profit_values(p: Product):
     margin = (net / p.selling_price * 100) if p.selling_price else 0
     return round(net, 2), round(margin, 2)
 
+def eligibility_reasons(p: Product, score: float, net: float, margin: float):
+    """Return actionable blockers for public listing; this is a screening gate, not verification."""
+    reasons = []
+    import re
+    market = str(getattr(p, "target_market", "") or "").strip().upper()
+    has_excluded_market = bool(
+        re.search(r"(^|[\s,;/|])DZ($|[\s,;/|])", market)
+        or "ALGERIA" in market
+        or "الجزائر" in market
+    )
+    if has_excluded_market:
+        reasons.append("السوق الجزائري غير مسموح في ProfitBot")
+    if p.selling_price <= 0:
+        reasons.append("أدخل سعر بيع موجباً")
+    if not str(getattr(p, "supplier_name", "") or "").strip():
+        reasons.append("أضف اسم المورد")
+    if not str(getattr(p, "source_url", "") or "").strip():
+        reasons.append("أضف رابط مصدر المنتج")
+    if net <= 0:
+        reasons.append("صافي الربح التقديري يجب أن يكون موجباً")
+    if margin < 15:
+        reasons.append("الهامش أقل من الحد الأدنى 15%")
+    if score < 70:
+        reasons.append("الدرجة أقل من الحد الأدنى 70")
+    if getattr(p, "supplier_reliability", 0) < 60:
+        reasons.append("موثوقية المورد أقل من 60/100")
+    if getattr(p, "shipping_score", 0) < 50:
+        reasons.append("درجة الشحن أقل من 50/100")
+    return reasons
+
+
 def score_values(p: Product):
     net, margin = profit_values(p)
     margin_component = max(0, min(100, margin))
@@ -43,11 +74,9 @@ def score_values(p: Product):
         + p.shipping_score * .10
         + p.marketing_fit * .10
     )
-    eligible = (
-        score >= 70 and net > 0 and margin >= 15
-        and p.supplier_reliability >= 60 and p.shipping_score >= 50
-    )
-    return round(score, 1), eligible, net, margin
+    score = round(score, 1)
+    reasons = eligibility_reasons(p, score, net, margin)
+    return score, not reasons, net, margin
 
 
 @app.get("/signals/trends", dependencies=[Depends(require_owner)])
@@ -322,6 +351,7 @@ def list_products(db: Session = Depends(get_db)):
         result.append({
             "id": p.id, "name": p.name, "category": p.category, "target_market": p.target_market,
             "supplier_name": p.supplier_name, "score": score, "eligible": eligible,
+            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
             "estimated_net_profit": net, "estimated_margin_pct": margin, "status": p.status
         })
     return result
@@ -336,7 +366,9 @@ def create_product(data: ProductCreate, db: Session = Depends(get_db)):
     audit(db, "product_created", "product", p.id, f"eligible={eligible}; net={net}; margin={margin}")
     db.commit()
     db.refresh(p)
-    return {"id": p.id, "score": score, "eligible": eligible, "estimated_net_profit": net, "estimated_margin_pct": margin}
+    return {"id": p.id, "score": score, "eligible": eligible,
+            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+            "estimated_net_profit": net, "estimated_margin_pct": margin}
 
 @app.post("/products/{product_id}/score", dependencies=[Depends(require_owner)])
 def rescore_product(product_id: int, db: Session = Depends(get_db)):
@@ -347,7 +379,9 @@ def rescore_product(product_id: int, db: Session = Depends(get_db)):
     p.score = score
     audit(db, "product_scored", "product", p.id, f"score={score}; eligible={eligible}")
     db.commit()
-    return {"id": p.id, "score": score, "eligible": eligible, "estimated_net_profit": net, "estimated_margin_pct": margin}
+    return {"id": p.id, "score": score, "eligible": eligible,
+            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+            "estimated_net_profit": net, "estimated_margin_pct": margin}
 
 
 @app.post("/suppliers", dependencies=[Depends(require_owner)])
@@ -419,14 +453,9 @@ def publish_product(product_id: int, db: Session = Depends(get_db)):
     if not product:
         raise HTTPException(404, "Product not found")
     score, eligible, net, margin = score_values(product)
-    if product.selling_price <= 0 or net <= 0 or not product.supplier_name or not product.source_url:
-        raise HTTPException(400, "Before publishing, add a supplier, source URL, positive selling price and positive estimated net profit")
-    if not eligible:
-        raise HTTPException(
-            409,
-            "Product is not eligible for publication. Required: score >= 70, margin >= 15%, "
-            "supplier reliability >= 60 and shipping score >= 50, with positive net profit."
-        )
+    reasons = eligibility_reasons(product, score, net, margin)
+    if reasons:
+        raise HTTPException(409, "لا يمكن نشر المنتج: " + "؛ ".join(reasons))
     product.status = "published"
     product.score = score
     audit(db, "product_published", "product", product.id, "public storefront; supplier and fulfilment still require manual confirmation")

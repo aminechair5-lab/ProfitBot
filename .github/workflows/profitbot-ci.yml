@@ -34,15 +34,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Check storefront JavaScript syntax
+      - name: Check storefront and dashboard JavaScript syntax
         run: |
           python - <<'PY'
           import re
           from pathlib import Path
-          html = Path("backend/app/storefront.html").read_text(encoding="utf-8")
-          scripts = re.findall(r"<script>([\s\S]*?)</script>", html)
-          if not scripts:
-              raise SystemExit("No inline storefront script found")
-          Path("storefront-check.js").write_text("\n".join(scripts), encoding="utf-8")
+          for name in ("storefront", "dashboard"):
+              html = Path(f"backend/app/{name}.html").read_text(encoding="utf-8")
+              scripts = re.findall(r"<script>([\s\S]*?)</script>", html)
+              if not scripts:
+                  raise SystemExit(f"No inline {name} script found")
+              Path(f"{name}-check.js").write_text("\n".join(scripts), encoding="utf-8")
           PY
           node --check storefront-check.js
+          node --check dashboard-check.js
