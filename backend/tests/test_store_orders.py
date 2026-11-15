@@ -24,6 +24,14 @@ class StoreOrderValidationTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             StoreOrderCreate(**self.valid_payload(destination_country="DZ"))
 
+    def test_rejects_filled_honeypot(self):
+        with self.assertRaises(ValidationError):
+            StoreOrderCreate(**self.valid_payload(), website="https://spam.example")
+
+    def test_accepts_empty_honeypot(self):
+        order = StoreOrderCreate(**self.valid_payload(), website="")
+        self.assertEqual(order.website, "")
+
     def test_rejects_invalid_email(self):
         with self.assertRaises(ValidationError):
             StoreOrderCreate(**self.valid_payload(customer_email="not-an-email"))
