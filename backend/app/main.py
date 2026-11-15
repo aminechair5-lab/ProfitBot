@@ -883,6 +883,11 @@ def paypal_checkout_availability():
 def create_paypal_checkout(data: PayPalCheckoutCreate, db: Session = Depends(get_db)):
     if not paypal_configured():
         raise HTTPException(503, "PayPal is not configured. Add server-side PayPal credentials first.")
+    from urllib.parse import urlsplit
+    allowed_hosts = {"profitbot-484v.onrender.com"}
+    allowed_hosts.update(urlsplit(origin).hostname for origin in settings.cors_origins if urlsplit(origin).hostname)
+    if urlsplit(data.return_url).hostname not in allowed_hosts or urlsplit(data.cancel_url).hostname not in allowed_hosts:
+        raise HTTPException(400, "PayPal return and cancel URLs must point to the configured ProfitBot storefront")
     order = db.scalar(select(CustomerOrder).where(CustomerOrder.order_ref == data.order_ref))
     if not order:
         raise HTTPException(404, "Order not found")
