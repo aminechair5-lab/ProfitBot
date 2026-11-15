@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import hashlib
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pathlib import Path
@@ -7,8 +8,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Product, Approval, AuditEvent
-from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision
+from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal
+from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate
 from .security import require_owner
 
 Base.metadata.create_all(bind=engine)
@@ -50,7 +51,7 @@ def score_values(p: Product):
 
 
 @app.get("/signals/trends", dependencies=[Depends(require_owner)])
-def google_trend_signals(geo: str = "DZ"):
+def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
     """Classify public trending searches as product-related candidates, never as verified sales."""
     import re
     import urllib.error
@@ -61,6 +62,8 @@ def google_trend_signals(geo: str = "DZ"):
     country = geo.upper().strip()
     if not re.fullmatch(r"[A-Z]{2}", country):
         raise HTTPException(400, "geo must be a two-letter country code")
+    if country == "DZ":
+        raise HTTPException(400, "The Algerian market is not supported by ProfitBot target-market discovery")
 
     url = f"https://trends.google.com/trending/rss?geo={country}"
     request = urllib.request.Request(
@@ -164,9 +167,27 @@ def google_trend_signals(geo: str = "DZ"):
             **classification
         })
     candidates.sort(key=lambda row: (row["commercial_score"], row.get("approx_traffic") or ""), reverse=True)
+    observed_at = datetime.now(timezone.utc)
+    for candidate in candidates[:20]:
+        signal_key = hashlib.sha256((country + "|" + candidate["title"].casefold() + "|" + candidate["url"]).encode("utf-8")).hexdigest()
+        saved = db.scalar(select(TrendSignal).where(TrendSignal.signal_key == signal_key))
+        if saved is None:
+            saved = TrendSignal(signal_key=signal_key, title=candidate["title"], geo=country,
+                category=candidate["category"], source=candidate["source"], source_url=candidate["url"],
+                signal_type=candidate["signal_type"], commercial_score=candidate["commercial_score"],
+                confidence=candidate["confidence"], matched_terms=", ".join(candidate["matched_product_terms"]),
+                published_at=candidate["published_at"], observed_at=observed_at)
+            db.add(saved)
+        else:
+            saved.commercial_score = candidate["commercial_score"]
+            saved.confidence = candidate["confidence"]
+            saved.observed_at = observed_at
+    db.commit()
     return {
         "source": "Google Trends Trending RSS",
         "geo": country,
+        "market_scope": "international_only",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "scanned_count": scanned_count,
         "count": len(candidates[:20]),
         "excluded_count": rejected_count,
@@ -179,6 +200,11 @@ def google_trend_signals(geo: str = "DZ"):
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     page = Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
+    return HTMLResponse(content=page)
+
+@app.get("/store", response_class=HTMLResponse)
+def public_storefront():
+    page = Path(__file__).with_name("storefront.html").read_text(encoding="utf-8")
     return HTMLResponse(content=page)
 
 @app.get("/health")
@@ -200,6 +226,24 @@ def health():
         "storage_note": "PostgreSQL configured" if persistent_storage else "SQLite is suitable for local testing; hosted ephemeral filesystems may lose data on restart or redeploy.",
         "live_integrations": False
     }
+
+
+@app.get("/signals/history", dependencies=[Depends(require_owner)])
+def trend_signal_history(geo: str | None = None, db: Session = Depends(get_db)):
+    query = select(TrendSignal).order_by(desc(TrendSignal.observed_at)).limit(300)
+    if geo:
+        country = geo.upper().strip()
+        if len(country) != 2 or country == "DZ":
+            raise HTTPException(400, "Use a supported two-letter international country code")
+        query = query.where(TrendSignal.geo == country)
+    rows = db.scalars(query).all()
+    return [{
+        "id": row.id, "title": row.title, "geo": row.geo, "category": row.category,
+        "source": row.source, "source_url": row.source_url, "signal_type": row.signal_type,
+        "commercial_score": row.commercial_score, "confidence": row.confidence,
+        "matched_terms": row.matched_terms, "published_at": row.published_at,
+        "observed_at": row.observed_at, "commercially_verified": False
+    } for row in rows]
 
 @app.get("/owner/summary", dependencies=[Depends(require_owner)])
 def owner_summary(db: Session = Depends(get_db)):
@@ -252,6 +296,161 @@ def rescore_product(product_id: int, db: Session = Depends(get_db)):
     audit(db, "product_scored", "product", p.id, f"score={score}; eligible={eligible}")
     db.commit()
     return {"id": p.id, "score": score, "eligible": eligible, "estimated_net_profit": net, "estimated_margin_pct": margin}
+
+
+@app.post("/suppliers", dependencies=[Depends(require_owner)])
+def create_supplier(data: SupplierCreate, db: Session = Depends(get_db)):
+    supplier = Supplier(**data.model_dump(), verification_status="unverified", reliability_score=0)
+    db.add(supplier)
+    db.flush()
+    audit(db, "supplier_created", "supplier", supplier.id, "verification_status=unverified")
+    db.commit()
+    db.refresh(supplier)
+    return {"id": supplier.id, "name": supplier.name, "verification_status": supplier.verification_status,
+            "reliability_score": supplier.reliability_score}
+
+
+@app.get("/suppliers", dependencies=[Depends(require_owner)])
+def list_suppliers(db: Session = Depends(get_db)):
+    rows = db.scalars(select(Supplier).order_by(desc(Supplier.created_at)).limit(200)).all()
+    return [{
+        "id": row.id, "name": row.name, "website_url": row.website_url,
+        "country_code": row.country_code, "contact_url": row.contact_url,
+        "verification_status": row.verification_status, "reliability_score": row.reliability_score,
+        "notes": row.notes, "created_at": row.created_at
+    } for row in rows]
+
+
+@app.post("/supplier-offers", dependencies=[Depends(require_owner)])
+def create_supplier_offer(data: SupplierOfferCreate, db: Session = Depends(get_db)):
+    supplier = db.get(Supplier, data.supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Supplier not found")
+    if data.product_id is not None and not db.get(Product, data.product_id):
+        raise HTTPException(404, "Linked product not found")
+    offer_data = data.model_dump()
+    offer = SupplierOffer(**offer_data, verification_status="unverified")
+    db.add(offer)
+    db.flush()
+    audit(db, "supplier_offer_created", "supplier_offer", offer.id,
+          f"supplier_id={supplier.id}; data_source={offer.data_source}; verified=false")
+    db.commit()
+    db.refresh(offer)
+    return {"id": offer.id, "supplier_id": offer.supplier_id, "product_id": offer.product_id,
+            "verification_status": offer.verification_status, "checked_at": offer.checked_at}
+
+
+@app.get("/supplier-offers", dependencies=[Depends(require_owner)])
+def list_supplier_offers(supplier_id: int | None = None, product_id: int | None = None,
+                         db: Session = Depends(get_db)):
+    query = select(SupplierOffer).order_by(desc(SupplierOffer.checked_at)).limit(300)
+    if supplier_id is not None:
+        query = query.where(SupplierOffer.supplier_id == supplier_id)
+    if product_id is not None:
+        query = query.where(SupplierOffer.product_id == product_id)
+    rows = db.scalars(query).all()
+    return [{
+        "id": row.id, "supplier_id": row.supplier_id, "product_id": row.product_id,
+        "product_title": row.product_title, "source_url": row.source_url,
+        "supplier_sku": row.supplier_sku, "unit_price": row.unit_price, "currency": row.currency,
+        "shipping_cost": row.shipping_cost, "shipping_currency": row.shipping_currency,
+        "destination_markets": row.destination_markets, "shipping_days_min": row.shipping_days_min,
+        "shipping_days_max": row.shipping_days_max, "stock_status": row.stock_status,
+        "data_source": row.data_source, "verification_status": row.verification_status,
+        "checked_at": row.checked_at
+    } for row in rows]
+
+
+@app.post("/products/{product_id}/publish", dependencies=[Depends(require_owner)])
+def publish_product(product_id: int, db: Session = Depends(get_db)):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Product not found")
+    score, eligible, net, margin = score_values(product)
+    if product.selling_price <= 0 or net <= 0 or not product.supplier_name or not product.source_url:
+        raise HTTPException(400, "Before publishing, add a supplier, source URL, positive selling price and positive estimated net profit")
+    product.status = "published"
+    product.score = score
+    audit(db, "product_published", "product", product.id, "public storefront; supplier and fulfilment still require manual confirmation")
+    db.commit()
+    return {"id": product.id, "status": product.status, "score": score,
+            "estimated_net_profit": net, "estimated_margin_pct": margin,
+            "notice": "Listing is visible; supplier stock, shipping and payment are not automatically verified."}
+
+
+@app.get("/store/products")
+def public_store_products(db: Session = Depends(get_db)):
+    rows = db.scalars(select(Product).where(Product.status == "published").order_by(desc(Product.created_at)).limit(100)).all()
+    return [{
+        "id": p.id, "name": p.name, "category": p.category, "target_market": p.target_market,
+        "price": p.selling_price, "currency": "USD", "description": "منتج معروض من متجر ProfitBot. يتم تأكيد التوفر والشحن يدوياً قبل تحصيل أي مبلغ."
+    } for p in rows]
+
+
+@app.post("/store/orders")
+def create_store_order(data: StoreOrderCreate, db: Session = Depends(get_db)):
+    product = db.get(Product, data.product_id)
+    if not product or product.status != "published":
+        raise HTTPException(404, "Product is not available in the store")
+    if product.selling_price <= 0:
+        raise HTTPException(409, "Product price is not configured")
+    import secrets
+    order = CustomerOrder(
+        order_ref="PB-" + secrets.token_hex(5).upper(),
+        product_id=product.id, product_name=product.name, quantity=data.quantity,
+        unit_price=product.selling_price, total_amount=round(product.selling_price * data.quantity, 2),
+        currency="USD", customer_name=data.customer_name, customer_email=data.customer_email,
+        destination_country=data.destination_country, shipping_address=data.shipping_address,
+        status="pending_payment"
+    )
+    db.add(order)
+    db.flush()
+    audit(db, "store_order_created", "order", order.order_ref, "status=pending_payment; payment not collected")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status, "total_amount": order.total_amount,
+            "currency": order.currency,
+            "message": "تم استلام طلبك مبدئياً. لم يتم تحصيل أي مبلغ؛ سيتم تأكيد التوفر والشحن ووسيلة الدفع معك."}
+
+
+@app.get("/orders", dependencies=[Depends(require_owner)])
+def list_customer_orders(db: Session = Depends(get_db)):
+    rows = db.scalars(select(CustomerOrder).order_by(desc(CustomerOrder.created_at)).limit(200)).all()
+    return [{
+        "id": o.id, "order_ref": o.order_ref, "product_name": o.product_name, "quantity": o.quantity,
+        "total_amount": o.total_amount, "currency": o.currency, "customer_name": o.customer_name,
+        "customer_email": o.customer_email, "destination_country": o.destination_country,
+        "shipping_address": o.shipping_address, "status": o.status, "payment_reference": o.payment_reference,
+        "tracking_number": o.tracking_number, "created_at": o.created_at
+    } for o in rows]
+
+
+@app.post("/orders/{order_id}/status", dependencies=[Depends(require_owner)])
+def update_customer_order(order_id: int, data: OrderStatusUpdate, db: Session = Depends(get_db)):
+    order = db.get(CustomerOrder, order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    allowed = {
+        "pending_payment": {"payment_confirmed", "cancelled"},
+        "payment_confirmed": {"supplier_ordered", "cancelled"},
+        "supplier_ordered": {"shipped", "cancelled"},
+        "shipped": {"delivered"},
+        "delivered": set(), "cancelled": set()
+    }
+    if data.status not in allowed.get(order.status, set()):
+        raise HTTPException(409, f"Invalid order transition: {order.status} -> {data.status}")
+    if data.status == "payment_confirmed" and not data.payment_reference:
+        raise HTTPException(400, "Record a verified external payment reference before confirming payment")
+    if data.status == "shipped" and not data.tracking_number:
+        raise HTTPException(400, "Tracking number is required before marking an order shipped")
+    order.status = data.status
+    if data.payment_reference:
+        order.payment_reference = data.payment_reference
+    if data.tracking_number:
+        order.tracking_number = data.tracking_number
+    order.updated_at = datetime.now(timezone.utc)
+    audit(db, "order_status_updated", "order", order.order_ref, f"status={order.status}")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status}
 
 @app.post("/approvals", dependencies=[Depends(require_owner)])
 def create_approval(data: ApprovalCreate, db: Session = Depends(get_db)):
