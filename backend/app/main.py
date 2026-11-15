@@ -309,6 +309,67 @@ def compare_trend_markets(markets: str = "US,GB,DE,CA", db: Session = Depends(ge
         "items": items[:40]
     }
 
+
+@app.get("/signals/opportunities", dependencies=[Depends(require_owner)])
+def discover_product_opportunities(
+    markets: str = "US,GB,DE,CA",
+    min_markets: int = 1,
+    limit: int = 30,
+    db: Session = Depends(get_db),
+):
+    """Rank international product candidates by keyword relevance and cross-market breadth only."""
+    if min_markets < 1 or min_markets > 4:
+        raise HTTPException(400, "min_markets must be between 1 and 4")
+    if limit < 1 or limit > 40:
+        raise HTTPException(400, "limit must be between 1 and 40")
+
+    comparison = compare_trend_markets(markets=markets, db=db)
+    successful_markets = len(comparison["markets_scanned"])
+    ranked = []
+    for item in comparison["items"]:
+        breadth = round((item["market_count"] / successful_markets) * 100, 1) if successful_markets else 0
+        # This is an operational review priority, not a demand, sales, or profit estimate.
+        priority = round(item["commercial_score"] * 0.7 + breadth * 0.3, 1)
+        reasons = ["تطابق كلمات المنتج: " + str(item["commercial_score"]) + "/100"]
+        reasons.append("اتساع الأسواق: " + str(item["market_count"]) + "/" + str(successful_markets))
+        if item["cross_market_signal"]:
+            reasons.append("ظهرت الإشارة في أكثر من سوق")
+        ranked.append({
+            **item,
+            "market_breadth_score": breadth,
+            "discovery_priority_score": priority,
+            "priority_reasons": reasons,
+            "signal_type": "search_interest",
+            "commercially_verified": False,
+            "demand_verified": False,
+            "sales_verified": False,
+            "profitability_verified": False,
+            "recommended_next_step": "تحقق يدوياً من المورد والسعر والمخزون والشحن والرسوم والضرائب والمنافسة.",
+        })
+
+    ranked = [item for item in ranked if item["market_count"] >= min_markets]
+    ranked.sort(
+        key=lambda item: (item["discovery_priority_score"], item["market_count"], item["commercial_score"]),
+        reverse=True,
+    )
+    for index, item in enumerate(ranked[:limit], start=1):
+        item["rank"] = index
+
+    return {
+        "source": "Google Trends Trending RSS",
+        "market_scope": "international_only",
+        "markets_requested": comparison["markets_requested"],
+        "markets_scanned": comparison["markets_scanned"],
+        "failures": comparison["failures"],
+        "min_markets": min_markets,
+        "count": min(len(ranked), limit),
+        "total_candidates_after_filter": len(ranked),
+        "items": ranked[:limit],
+        "score_interpretation": "Discovery priority is a heuristic review-priority score from keyword relevance (70%) and market breadth (30%). It is not search volume, purchase intent, demand, conversion, sales, or profit.",
+        "warning": "هذه أولوية للفحص فقط، وليست قياساً للطلب أو المبيعات أو الربح. يلزم التحقق اليدوي من المورد والتكلفة والشحن والرسوم والضرائب والمنافسة قبل إضافة المنتج أو نشره.",
+    }
+
+
 @app.get("/signals/history", dependencies=[Depends(require_owner)])
 def trend_signal_history(geo: str | None = None, db: Session = Depends(get_db)):
     query = select(TrendSignal).order_by(desc(TrendSignal.observed_at)).limit(300)
