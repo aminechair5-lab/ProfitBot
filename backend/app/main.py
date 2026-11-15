@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Product, Approval, AuditEvent
-from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision
+from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer
+from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate
 from .security import require_owner
 
 Base.metadata.create_all(bind=engine)
@@ -256,6 +256,69 @@ def rescore_product(product_id: int, db: Session = Depends(get_db)):
     audit(db, "product_scored", "product", p.id, f"score={score}; eligible={eligible}")
     db.commit()
     return {"id": p.id, "score": score, "eligible": eligible, "estimated_net_profit": net, "estimated_margin_pct": margin}
+
+
+@app.post("/suppliers", dependencies=[Depends(require_owner)])
+def create_supplier(data: SupplierCreate, db: Session = Depends(get_db)):
+    supplier = Supplier(**data.model_dump(), verification_status="unverified", reliability_score=0)
+    db.add(supplier)
+    db.flush()
+    audit(db, "supplier_created", "supplier", supplier.id, "verification_status=unverified")
+    db.commit()
+    db.refresh(supplier)
+    return {"id": supplier.id, "name": supplier.name, "verification_status": supplier.verification_status,
+            "reliability_score": supplier.reliability_score}
+
+
+@app.get("/suppliers", dependencies=[Depends(require_owner)])
+def list_suppliers(db: Session = Depends(get_db)):
+    rows = db.scalars(select(Supplier).order_by(desc(Supplier.created_at)).limit(200)).all()
+    return [{
+        "id": row.id, "name": row.name, "website_url": row.website_url,
+        "country_code": row.country_code, "contact_url": row.contact_url,
+        "verification_status": row.verification_status, "reliability_score": row.reliability_score,
+        "notes": row.notes, "created_at": row.created_at
+    } for row in rows]
+
+
+@app.post("/supplier-offers", dependencies=[Depends(require_owner)])
+def create_supplier_offer(data: SupplierOfferCreate, db: Session = Depends(get_db)):
+    supplier = db.get(Supplier, data.supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Supplier not found")
+    if data.product_id is not None and not db.get(Product, data.product_id):
+        raise HTTPException(404, "Linked product not found")
+    offer_data = data.model_dump()
+    offer = SupplierOffer(**offer_data, verification_status="unverified")
+    db.add(offer)
+    db.flush()
+    audit(db, "supplier_offer_created", "supplier_offer", offer.id,
+          f"supplier_id={supplier.id}; data_source={offer.data_source}; verified=false")
+    db.commit()
+    db.refresh(offer)
+    return {"id": offer.id, "supplier_id": offer.supplier_id, "product_id": offer.product_id,
+            "verification_status": offer.verification_status, "checked_at": offer.checked_at}
+
+
+@app.get("/supplier-offers", dependencies=[Depends(require_owner)])
+def list_supplier_offers(supplier_id: int | None = None, product_id: int | None = None,
+                         db: Session = Depends(get_db)):
+    query = select(SupplierOffer).order_by(desc(SupplierOffer.checked_at)).limit(300)
+    if supplier_id is not None:
+        query = query.where(SupplierOffer.supplier_id == supplier_id)
+    if product_id is not None:
+        query = query.where(SupplierOffer.product_id == product_id)
+    rows = db.scalars(query).all()
+    return [{
+        "id": row.id, "supplier_id": row.supplier_id, "product_id": row.product_id,
+        "product_title": row.product_title, "source_url": row.source_url,
+        "supplier_sku": row.supplier_sku, "unit_price": row.unit_price, "currency": row.currency,
+        "shipping_cost": row.shipping_cost, "shipping_currency": row.shipping_currency,
+        "destination_markets": row.destination_markets, "shipping_days_min": row.shipping_days_min,
+        "shipping_days_max": row.shipping_days_max, "stock_status": row.stock_status,
+        "data_source": row.data_source, "verification_status": row.verification_status,
+        "checked_at": row.checked_at
+    } for row in rows]
 
 @app.post("/approvals", dependencies=[Depends(require_owner)])
 def create_approval(data: ApprovalCreate, db: Session = Depends(get_db)):
