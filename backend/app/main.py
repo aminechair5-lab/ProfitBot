@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -389,6 +389,14 @@ def public_store_products(db: Session = Depends(get_db)):
 
 @app.post("/store/orders")
 def create_store_order(data: StoreOrderCreate, db: Session = Depends(get_db)):
+    # Lightweight persistent abuse control: cap repeated submissions per normalized email.
+    rate_window_start = datetime.now(timezone.utc) - timedelta(minutes=15)
+    recent_email_orders = db.scalar(select(func.count()).select_from(CustomerOrder).where(
+        CustomerOrder.customer_email == data.customer_email,
+        CustomerOrder.created_at >= rate_window_start
+    )) or 0
+    if recent_email_orders >= 3:
+        raise HTTPException(429, "Too many order requests from this email. Please try again later.")
     product = db.get(Product, data.product_id)
     if not product or product.status != "published":
         raise HTTPException(404, "Product is not available in the store")
