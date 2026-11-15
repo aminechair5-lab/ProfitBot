@@ -35,6 +35,22 @@ async function load(){try{const r=await fetch("/store/products");if(!r.ok)throw 
 $("langToggle").addEventListener("click",()=>setLanguage(lang==="en"?"ar":"en"));
 $("products").addEventListener("click",e=>{const b=e.target.closest("button[data-product-id]");if(b)choose(Number(b.dataset.productId),b.dataset.productName)});
 function choose(id,name){$("productId").value=id;$("selectedProduct").dataset.name=name;$("selectedProduct").textContent=words[lang].selected+name;$("orderPanel").classList.remove("hidden");$("orderPanel").scrollIntoView({behavior:"smooth"})}
-$("orderForm").addEventListener("submit",async e=>{e.preventDefault();$("orderMessage").textContent=words[lang].sending;const payload={product_id:Number($("productId").value),quantity:Number($("quantity").value),customer_name:$("customerName").value.trim(),customer_email:$("customerEmail").value.trim(),destination_country:$("country").value.trim().toUpperCase(),shipping_address:$("address").value.trim(),website:$("website").value};try{const r=await fetch("/store/orders",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok){if(r.status===429)throw new Error(words[lang].rateLimit);throw new Error(d.detail||words[lang].loadError)}$("orderMessage").textContent=(lang==="ar"?"رقم الطلب: ":"Order reference: ")+d.order_ref+"\n"+(lang==="ar"?d.message:words[lang].requestReceived);$("orderForm").reset()}catch(err){$("orderMessage").textContent=err.message}});
+async function captureReturnedPayPalOrder(){
+ const params=new URLSearchParams(location.search), orderRef=params.get("order_ref"), paypalId=params.get("token");
+ if(params.get("paypal_return")!=="1"||!orderRef||!paypalId)return;
+ $("orderMessage").textContent=lang==="ar"?"جارٍ تأكيد دفعة PayPal…":"Confirming PayPal payment…";
+ try{
+  const r=await fetch("/payments/paypal/capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({order_ref:orderRef,paypal_order_id:paypalId})});
+  const d=await r.json();if(!r.ok)throw new Error(d.detail||"Payment confirmation failed");
+  $("orderMessage").textContent=(lang==="ar"?"تم تأكيد الدفع للطلب ":"Payment confirmed for order ")+d.order_ref;
+ }catch(err){$("orderMessage").textContent=(lang==="ar"?"لم نتمكن من تأكيد الدفع تلقائياً: ":"Could not confirm payment automatically: ")+err.message}
+ history.replaceState({},document.title,"/store");
+}
+$("orderForm").addEventListener("submit",async e=>{e.preventDefault();$("orderMessage").textContent=words[lang].sending;const payload={product_id:Number($("productId").value),quantity:Number($("quantity").value),customer_name:$("customerName").value.trim(),customer_email:$("customerEmail").value.trim(),destination_country:$("country").value.trim().toUpperCase(),shipping_address:$("address").value.trim(),website:$("website").value};try{const r=await fetch("/store/orders",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok){if(r.status===429)throw new Error(words[lang].rateLimit);throw new Error(d.detail||words[lang].loadError)}$("orderMessage").textContent=(lang==="ar"?"رقم الطلب: ":"Order reference: ")+d.order_ref+"\\n"+(lang==="ar"?d.message:words[lang].requestReceived);$("orderForm").reset();
+ const base=location.origin+"/store", checkout=await fetch("/payments/paypal/create-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({order_ref:d.order_ref,return_url:base+"?paypal_return=1&order_ref="+encodeURIComponent(d.order_ref),cancel_url:base+"?paypal_cancel=1&order_ref="+encodeURIComponent(d.order_ref)})});
+ const payment=await checkout.json();if(checkout.ok&&payment.approval_url){$("orderMessage").textContent+=(lang==="ar"?" جارٍ تحويلك إلى PayPal لإتمام الدفع الاختياري…":" Redirecting to PayPal for your checkout…");location.href=payment.approval_url}else{$("orderMessage").textContent+=(lang==="ar"?" الدفع الإلكتروني غير مفعّل حالياً؛ لم يتم خصم أي مبلغ.":" Online checkout is not enabled yet; no money was charged.")}
+ }catch(err){$("orderMessage").textContent=err.message}});
+if(new URLSearchParams(location.search).get("paypal_cancel")==="1"){$("orderMessage").textContent=lang==="ar"?"ألغيت عملية الدفع. لم يتم خصم أي مبلغ.":"Checkout was cancelled. No money was charged.";history.replaceState({},document.title,"/store")}
+captureReturnedPayPalOrder();
 load();
 </script></body></html>
