@@ -276,6 +276,14 @@ class CJOrderCreate(BaseModel):
     supplier_offer_id: int = Field(gt=0)
     confirm_live_creation: bool = False
 
+    @field_validator("from_country_code")
+    @classmethod
+    def origin_country_must_exclude_algeria(cls, value: str) -> str:
+        value = value.upper()
+        if value == "DZ":
+            raise ValueError("Algeria is excluded from ProfitBot supplier and shipping operations")
+        return value
+
 
 
 class SupplierPaymentConfirmation(BaseModel):
