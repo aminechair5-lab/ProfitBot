@@ -108,6 +108,30 @@ class ProductOpportunityDiscoveryTests(unittest.TestCase):
             self.assertIsNone(result["linked_product_id"])
             self.assertEqual(result["missing_markets"], ["GB", "US"])
 
+    def test_verified_offer_from_algerian_supplier_is_rejected(self):
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            product = Product(name="Air fryer", supplier_cost=20, shipping_cost=5)
+            supplier = Supplier(name="Legacy DZ supplier", country_code="DZ",
+                                verification_status="verified", reliability_score=90)
+            db.add_all([product, supplier])
+            db.flush()
+            db.add(SupplierOffer(
+                supplier_id=supplier.id, product_id=product.id, product_title="Air fryer",
+                source_url="https://supplier.example/air-fryer", supplier_sku="AF-DZ",
+                unit_price=20, currency="USD", shipping_cost=5, shipping_currency="USD",
+                destination_markets="US", shipping_days_min=5, shipping_days_max=9,
+                stock_status="in_stock", verification_status="verified",
+                checked_at=datetime.now(timezone.utc),
+            ))
+            db.commit()
+
+            result = opportunity_supplier_readiness(db, "Air fryer", ["US"])
+            self.assertEqual(result["status"], "no_current_verified_offer")
+            self.assertEqual(result["verified_markets"], [])
+            self.assertEqual(result["missing_markets"], ["US"])
+
     def test_rejects_invalid_minimum_markets_and_limit(self):
         with self.assertRaises(HTTPException):
             discover_product_opportunities(min_markets=0, db=None)
