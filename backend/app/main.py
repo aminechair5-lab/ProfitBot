@@ -11,6 +11,7 @@ from .db import Base, engine, get_db
 from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal
 from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate
 from .security import require_owner
+from .product_sources import discover_product_articles, MARKET_LOCALES
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
@@ -375,6 +376,88 @@ def compare_trend_markets(markets: str = "US,GB,DE,CA", db: Session = Depends(ge
         "cross_market_count": sum(1 for item in items if item["cross_market_signal"]),
         "warning": "تكرار الإشارة بين الأسواق يزيد أولوية الفحص فقط؛ لا يثبت المبيعات أو الطلب المدفوع.",
         "items": items[:40]
+    }
+
+
+@app.get("/signals/products/markets", dependencies=[Depends(require_owner)])
+def discover_specialized_product_markets(markets: str = "US,GB,DE,CA"):
+    """Discover product-specific editorial coverage from free, localized RSS feeds."""
+    import re
+    requested = list(dict.fromkeys(part.strip().upper() for part in markets.split(",") if part.strip()))
+    if not requested or len(requested) > 4:
+        raise HTTPException(400, "Choose between 1 and 4 markets")
+    if any(not re.fullmatch(r"[A-Z]{2}", code) for code in requested):
+        raise HTTPException(400, "Each market must be a two-letter country code")
+    if "DZ" in requested:
+        raise HTTPException(400, "The Algerian market is not supported by ProfitBot target-market discovery")
+    unsupported = [code for code in requested if code not in MARKET_LOCALES]
+    if unsupported:
+        raise HTTPException(400, "Unsupported target markets: " + ", ".join(unsupported))
+
+    scans = []
+    failures = []
+    grouped = {}
+    for country in requested:
+        try:
+            result = discover_product_articles(country)
+            scans.append({
+                "geo": country,
+                "scanned_count": result["scanned_count"],
+                "count": result["matched_count"],
+                "unclassified_count": result["unclassified_count"],
+                "unclassified_items": result["unclassified_items"],
+                "source": result["source"],
+            })
+            for item in result["items"]:
+                key = re.sub(r"[^\\w]+", " ", item["title"].casefold(), flags=re.UNICODE).strip()
+                if not key:
+                    continue
+                current = grouped.setdefault(key, {
+                    **item,
+                    "markets": [],
+                    "source_urls": [],
+                    "market_count": 0,
+                    "cross_market_signal": False,
+                })
+                if country not in current["markets"]:
+                    current["markets"].append(country)
+                if item["source_url"] and item["source_url"] not in current["source_urls"]:
+                    current["source_urls"].append(item["source_url"])
+                current["relevance_score"] = max(current["relevance_score"], item["relevance_score"])
+        except RuntimeError as exc:
+            failures.append({"geo": country, "error": str(exc)[:200]})
+
+    items = list(grouped.values())
+    for item in items:
+        item["market_count"] = len(item["markets"])
+        item["cross_market_signal"] = item["market_count"] >= 2
+        # Review priority combines editorial relevance and breadth; it is not demand.
+        breadth = (item["market_count"] / len(scans) * 100) if scans else 0
+        item["discovery_priority_score"] = round(item["relevance_score"] * 0.7 + breadth * 0.3, 1)
+        item["demand_verified"] = False
+        item["sales_verified"] = False
+        item["profitability_verified"] = False
+        item["recommended_next_step"] = "تحقق يدوياً من المورد والسعر والمخزون والشحن والرسوم والضرائب والمنافسة."
+    items.sort(key=lambda row: (row["discovery_priority_score"], row["market_count"]), reverse=True)
+
+    return {
+        "source": "Google News RSS (localized product/editorial search)",
+        "source_type": "editorial_coverage",
+        "market_scope": "international_only",
+        "markets_requested": requested,
+        "markets_scanned": scans,
+        "failures": failures,
+        "successful_market_count": len(scans),
+        "rss_items_scanned_total": sum(row["scanned_count"] for row in scans),
+        "matched_candidates_total": sum(row["count"] for row in scans),
+        "unclassified_count_total": sum(row["unclassified_count"] for row in scans),
+        "cross_market_count": sum(1 for item in items if item["cross_market_signal"]),
+        "unclassified_samples": [
+            {"geo": row["geo"], "title": sample["title"]}
+            for row in scans for sample in row["unclassified_items"]
+        ][:24],
+        "items": items[:40],
+        "warning": "المصدر مجاني ويعرض تغطية تحريرية لمنتجات في أخبار السوق، وليس حجم بحث المستهلكين أو مبيعات أو دليلاً على الطلب المدفوع. درجة الصلة وأولوية الفحص لا تثبت الربحية. تحقق يدوياً من المورد والسعر والمخزون والشحن والرسوم والضرائب والمنافسة قبل إضافة منتج أو نشره.",
     }
 
 
