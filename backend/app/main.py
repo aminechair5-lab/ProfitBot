@@ -756,6 +756,10 @@ def publish_product(product_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Product not found")
     score, eligible, net, margin = score_values(product)
     reasons = eligibility_reasons(product, score, net, margin)
+    import re
+    target_markets = [code for code in re.findall(r"(?<![A-Z0-9])[A-Z]{2}(?![A-Z0-9])", product.target_market.upper()) if code != "DZ"]
+    if not target_markets or any(verified_supplier_offer(db, product.id, code) is None for code in target_markets):
+        reasons.append("يلزم عرض مورد موثق وحديث ومتوفر ومناسب لكل سوق مستهدف قبل النشر")
     if reasons:
         raise HTTPException(409, "لا يمكن نشر المنتج: " + "؛ ".join(reasons))
     product.status = "published"
@@ -791,6 +795,8 @@ def create_store_order(data: StoreOrderCreate, db: Session = Depends(get_db)):
         raise HTTPException(404, "Product is not available in the store")
     if product.selling_price <= 0:
         raise HTTPException(409, "Product price is not configured")
+    if verified_supplier_offer(db, product.id, data.destination_country) is None:
+        raise HTTPException(409, "لا يمكن قبول الطلب قبل وجود عرض مورد موثق وحديث ومتوفر لهذا البلد مع تكلفة شحن ومدة تسليم مؤكدة")
     import secrets
     order = CustomerOrder(
         order_ref="PB-" + secrets.token_hex(5).upper(),
