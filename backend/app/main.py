@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 import hashlib
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal
-from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate
+from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal, PaymentAttempt, SupplierFulfillment, ShipmentTracking, NotificationLog
+from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate, SupplierPaymentConfirmation
 from .security import require_owner
 from .product_sources import discover_product_articles, MARKET_LOCALES, normalize
+from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
@@ -26,6 +27,71 @@ app.add_middleware(
 
 def audit(db: Session, event_type: str, entity_type: str, entity_id: str, detail: str = ""):
     db.add(AuditEvent(event_type=event_type, entity_type=entity_type, entity_id=str(entity_id), detail=detail))
+
+
+def supplier_offer_is_usable(db: Session, offer: SupplierOffer, market: str) -> bool:
+    market = market.strip().upper()
+    if not market or market == "DZ" or offer.verification_status != "verified":
+        return False
+    if offer.stock_status != "in_stock" or offer.shipping_cost is None or not offer.supplier_sku:
+        return False
+    if offer.shipping_days_min is None or offer.shipping_days_max is None:
+        return False
+    if offer.currency != "USD" or offer.shipping_currency != "USD":
+        return False
+    product = db.get(Product, offer.product_id) if offer.product_id else None
+    if not product or abs(product.supplier_cost - offer.unit_price) > 0.01:
+        return False
+    if abs(product.shipping_cost - float(offer.shipping_cost)) > 0.01:
+        return False
+    checked_at = offer.checked_at
+    if checked_at is None:
+        return False
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+    if checked_at < datetime.now(timezone.utc) - timedelta(hours=24):
+        return False
+    destinations = {part.strip().upper() for part in offer.destination_markets.replace(";", ",").split(",")}
+    supplier = db.get(Supplier, offer.supplier_id)
+    return market in destinations and supplier is not None and supplier.verification_status == "verified"
+
+
+def verified_supplier_offer(db: Session, product_id: int, market: str):
+    """Return only a recently checked, in-stock offer from a verified supplier."""
+    market = market.strip().upper()
+    if not market or market == "DZ":
+        return None
+    rows = db.scalars(select(SupplierOffer).where(
+        SupplierOffer.product_id == product_id
+    ).order_by(desc(SupplierOffer.checked_at))).all()
+    return next((offer for offer in rows if supplier_offer_is_usable(db, offer, market)), None)
+
+def supplier_offer_blockers(db: Session, product: Product) -> list[str]:
+    import re
+    markets = [code for code in re.findall(
+        r"(?<![A-Z0-9])[A-Z]{2}(?![A-Z0-9])", product.target_market.upper()
+    ) if code != "DZ"]
+    if not markets:
+        return ["حدد الأسواق المستهدفة برموز دول واضحة مثل US,GB,DE"]
+    missing = [market for market in markets if verified_supplier_offer(db, product.id, market) is None]
+    if missing:
+        return ["عرض المورد أو المخزون أو الشحن أو التكلفة غير موثق/قديم لهذه الأسواق: " + ", ".join(missing)]
+    return []
+
+
+def notify_customer(db: Session, order: CustomerOrder, event_type: str, subject: str, body: str):
+    status = "disabled"
+    detail = "SMTP is not configured"
+    try:
+        send_email_notification(recipient=order.customer_email, subject=subject, body=body)
+        status, detail = "sent", "SMTP accepted the message"
+    except ProviderNotConfigured as exc:
+        detail = str(exc)
+    except Exception as exc:
+        status, detail = "failed", type(exc).__name__
+    db.add(NotificationLog(order_ref=order.order_ref, event_type=event_type,
+                           channel="email", recipient=order.customer_email,
+                           status=status, detail=detail[:500]))
 
 def profit_values(p: Product):
     fees = p.selling_price * (p.platform_fee_pct + p.payment_fee_pct + p.returns_reserve_pct) / 100
@@ -570,10 +636,11 @@ def list_products(db: Session = Depends(get_db)):
     result = []
     for p in db.scalars(select(Product).order_by(desc(Product.created_at))).all():
         score, eligible, net, margin = score_values(p)
+        reasons = eligibility_reasons(p, score, net, margin) + supplier_offer_blockers(db, p)
         result.append({
             "id": p.id, "name": p.name, "category": p.category, "target_market": p.target_market,
-            "supplier_name": p.supplier_name, "score": score, "eligible": eligible,
-            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+            "supplier_name": p.supplier_name, "score": score, "eligible": eligible and not reasons,
+            "eligibility_reasons": reasons,
             "estimated_net_profit": net, "estimated_margin_pct": margin, "status": p.status
         })
     return result
@@ -585,11 +652,12 @@ def create_product(data: ProductCreate, db: Session = Depends(get_db)):
     db.flush()
     score, eligible, net, margin = score_values(p)
     p.score = score
-    audit(db, "product_created", "product", p.id, f"eligible={eligible}; net={net}; margin={margin}")
+    reasons = eligibility_reasons(p, score, net, margin) + supplier_offer_blockers(db, p)
+    audit(db, "product_created", "product", p.id, f"eligible={eligible and not reasons}; net={net}; margin={margin}")
     db.commit()
     db.refresh(p)
-    return {"id": p.id, "score": score, "eligible": eligible,
-            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+    return {"id": p.id, "score": score, "eligible": eligible and not reasons,
+            "eligibility_reasons": reasons,
             "estimated_net_profit": net, "estimated_margin_pct": margin}
 
 @app.post("/products/{product_id}/score", dependencies=[Depends(require_owner)])
@@ -599,10 +667,11 @@ def rescore_product(product_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Product not found")
     score, eligible, net, margin = score_values(p)
     p.score = score
-    audit(db, "product_scored", "product", p.id, f"score={score}; eligible={eligible}")
+    reasons = eligibility_reasons(p, score, net, margin) + supplier_offer_blockers(db, p)
+    audit(db, "product_scored", "product", p.id, f"score={score}; eligible={eligible and not reasons}")
     db.commit()
-    return {"id": p.id, "score": score, "eligible": eligible,
-            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+    return {"id": p.id, "score": score, "eligible": eligible and not reasons,
+            "eligibility_reasons": reasons,
             "estimated_net_profit": net, "estimated_margin_pct": margin}
 
 
@@ -669,13 +738,52 @@ def list_supplier_offers(supplier_id: int | None = None, product_id: int | None 
     } for row in rows]
 
 
+
+@app.post("/suppliers/{supplier_id}/verify", dependencies=[Depends(require_owner)])
+def verify_supplier(supplier_id: int, data: SupplierVerification, db: Session = Depends(get_db)):
+    supplier = db.get(Supplier, supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Supplier not found")
+    supplier.verification_status = "verified"
+    supplier.reliability_score = data.reliability_score
+    supplier.notes = (supplier.notes + "\\nVerification evidence: " + data.evidence_url + "\\n" + data.evidence_note).strip()
+    audit(db, "supplier_verified", "supplier", supplier.id,
+          f"reliability={data.reliability_score}; evidence={data.evidence_url}")
+    db.commit()
+    return {"id": supplier.id, "verification_status": supplier.verification_status,
+            "reliability_score": supplier.reliability_score}
+
+
+@app.post("/supplier-offers/{offer_id}/verify", dependencies=[Depends(require_owner)])
+def verify_supplier_offer(offer_id: int, data: SupplierOfferVerification, db: Session = Depends(get_db)):
+    offer = db.get(SupplierOffer, offer_id)
+    if not offer:
+        raise HTTPException(404, "Supplier offer not found")
+    supplier = db.get(Supplier, offer.supplier_id)
+    if not supplier or supplier.verification_status != "verified":
+        raise HTTPException(409, "Verify the supplier with evidence before verifying an offer")
+    if offer.stock_status != "in_stock" or offer.shipping_cost is None:
+        raise HTTPException(409, "Offer must have confirmed in-stock status and a shipping cost")
+    if offer.shipping_days_min is None or offer.shipping_days_max is None:
+        raise HTTPException(409, "A confirmed delivery-time range is required")
+    if not offer.product_id:
+        raise HTTPException(409, "Link the offer to a ProfitBot product before verification")
+    offer.verification_status = "verified"
+    offer.checked_at = datetime.now(timezone.utc)
+    audit(db, "supplier_offer_verified", "supplier_offer", offer.id,
+          f"evidence={data.evidence_url}; note={data.evidence_note}")
+    db.commit()
+    return {"id": offer.id, "verification_status": offer.verification_status,
+            "checked_at": offer.checked_at, "expires_in_hours": 24}
+
+
 @app.post("/products/{product_id}/publish", dependencies=[Depends(require_owner)])
 def publish_product(product_id: int, db: Session = Depends(get_db)):
     product = db.get(Product, product_id)
     if not product:
         raise HTTPException(404, "Product not found")
     score, eligible, net, margin = score_values(product)
-    reasons = eligibility_reasons(product, score, net, margin)
+    reasons = eligibility_reasons(product, score, net, margin) + supplier_offer_blockers(db, product)
     if reasons:
         raise HTTPException(409, "لا يمكن نشر المنتج: " + "؛ ".join(reasons))
     product.status = "published"
@@ -711,6 +819,8 @@ def create_store_order(data: StoreOrderCreate, db: Session = Depends(get_db)):
         raise HTTPException(404, "Product is not available in the store")
     if product.selling_price <= 0:
         raise HTTPException(409, "Product price is not configured")
+    if verified_supplier_offer(db, product.id, data.destination_country) is None:
+        raise HTTPException(409, "لا يمكن قبول الطلب قبل وجود عرض مورد موثق وحديث ومتوفر لهذا البلد مع تكلفة شحن ومدة تسليم مؤكدة")
     import secrets
     order = CustomerOrder(
         order_ref="PB-" + secrets.token_hex(5).upper(),
@@ -737,7 +847,13 @@ def list_customer_orders(db: Session = Depends(get_db)):
         "total_amount": o.total_amount, "currency": o.currency, "customer_name": o.customer_name,
         "customer_email": o.customer_email, "destination_country": o.destination_country,
         "status": o.status, "payment_reference": o.payment_reference,
-        "tracking_number": o.tracking_number, "created_at": o.created_at
+        "tracking_number": o.tracking_number, "created_at": o.created_at,
+        "fulfillment_status": (db.scalar(select(SupplierFulfillment.status).where(
+            SupplierFulfillment.order_ref == o.order_ref
+        ).order_by(desc(SupplierFulfillment.created_at)).limit(1)) or None),
+        "cj_order_id": (db.scalar(select(SupplierFulfillment.provider_order_id).where(
+            SupplierFulfillment.order_ref == o.order_ref
+        ).order_by(desc(SupplierFulfillment.created_at)).limit(1)) or None)
     } for o in rows]
 
 
@@ -748,7 +864,7 @@ def update_customer_order(order_id: int, data: OrderStatusUpdate, db: Session = 
         raise HTTPException(404, "Order not found")
     allowed = {
         "pending_payment": {"payment_confirmed", "cancelled"},
-        "payment_confirmed": {"supplier_ordered", "cancelled"},
+        "payment_confirmed": {"cancelled"},
         "supplier_ordered": {"shipped", "cancelled"},
         "shipped": {"delivered"},
         "delivered": set(), "cancelled": set()
@@ -766,8 +882,389 @@ def update_customer_order(order_id: int, data: OrderStatusUpdate, db: Session = 
         order.tracking_number = data.tracking_number
     order.updated_at = datetime.now(timezone.utc)
     audit(db, "order_status_updated", "order", order.order_ref, f"status={order.status}")
+    notify_customer(db, order, "order_status_" + order.status,
+                    "ProfitBot order update",
+                    f"Your order {order.order_ref} status is now {order.status}.")
     db.commit()
     return {"order_ref": order.order_ref, "status": order.status}
+
+
+@app.get("/integrations/status", dependencies=[Depends(require_owner)])
+def integration_status():
+    return {
+        "paypal_checkout": {"configured": paypal_configured(), "environment": __import__("os").getenv("PAYPAL_ENV", "sandbox")},
+        "cj_dropshipping": {"configured": cj_configured(), "live_order_creation_enabled": __import__("os").getenv("CJ_LIVE_ORDER_CREATION", "false").lower() == "true"},
+        "tracking_17track": {"configured": tracking_configured()},
+        "email_notifications": {"configured": all(__import__("os").getenv(k) for k in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM"))},
+        "note": "Missing credentials keep each provider disabled. Supplier payments are never made by ProfitBot."
+    }
+
+
+@app.get("/payments/paypal/availability")
+def paypal_checkout_availability():
+    import os
+    return {"available": paypal_configured(), "environment": os.getenv("PAYPAL_ENV", "sandbox")}
+
+
+@app.post("/payments/paypal/create-order")
+def create_paypal_checkout(data: PayPalCheckoutCreate, db: Session = Depends(get_db)):
+    if not paypal_configured():
+        raise HTTPException(503, "PayPal is not configured. Add server-side PayPal credentials first.")
+    from urllib.parse import urlsplit
+    allowed_hosts = {"profitbot-484v.onrender.com"}
+    allowed_hosts.update(urlsplit(origin).hostname for origin in settings.cors_origins if urlsplit(origin).hostname)
+    if urlsplit(data.return_url).hostname not in allowed_hosts or urlsplit(data.cancel_url).hostname not in allowed_hosts:
+        raise HTTPException(400, "PayPal return and cancel URLs must point to the configured ProfitBot storefront")
+    order = db.scalar(select(CustomerOrder).where(CustomerOrder.order_ref == data.order_ref))
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.status != "pending_payment":
+        raise HTTPException(409, "Order is not awaiting customer payment")
+    if verified_supplier_offer(db, order.product_id, order.destination_country) is None:
+        raise HTTPException(409, "Supplier stock and shipping must be verified for this destination before checkout")
+    existing = db.scalar(select(PaymentAttempt).where(
+        PaymentAttempt.order_ref == order.order_ref,
+        PaymentAttempt.status == "created"
+    ).order_by(desc(PaymentAttempt.created_at)))
+    if existing:
+        raise HTTPException(409, "A PayPal checkout is already open for this order")
+    try:
+        result = paypal_create_order(order_ref=order.order_ref, amount=f"{order.total_amount:.2f}",
+                                     currency=order.currency, return_url=data.return_url, cancel_url=data.cancel_url)
+    except (ProviderNotConfigured, ProviderRequestError) as exc:
+        raise HTTPException(502, str(exc)[:250])
+    paypal_id = result.get("id")
+    if result.get("status") != "CREATED" or not paypal_id:
+        raise HTTPException(502, "PayPal did not create a valid checkout order")
+    approve_url = next((link.get("href") for link in result.get("links", [])
+                        if link.get("rel") in {"approve", "payer-action"}), None)
+    if not approve_url:
+        raise HTTPException(502, "PayPal did not return an approval URL")
+    attempt = PaymentAttempt(order_ref=order.order_ref, provider="paypal",
+                             provider_order_id=str(paypal_id), status="created",
+                             amount=order.total_amount, currency=order.currency)
+    db.add(attempt)
+    audit(db, "paypal_checkout_created", "order", order.order_ref, f"paypal_order_id={paypal_id}")
+    db.commit()
+    return {"order_ref": order.order_ref, "paypal_order_id": paypal_id,
+            "approval_url": approve_url, "environment": __import__("os").getenv("PAYPAL_ENV", "sandbox")}
+
+
+@app.post("/payments/paypal/cancel")
+def cancel_paypal_checkout(data: PayPalCapture, db: Session = Depends(get_db)):
+    attempt = db.scalar(select(PaymentAttempt).where(
+        PaymentAttempt.order_ref == data.order_ref,
+        PaymentAttempt.provider_order_id == data.paypal_order_id,
+        PaymentAttempt.provider == "paypal"
+    ))
+    if not attempt:
+        raise HTTPException(404, "PayPal checkout attempt not found")
+    if attempt.status == "created":
+        attempt.status = "cancelled"
+        attempt.updated_at = datetime.now(timezone.utc)
+        audit(db, "paypal_checkout_cancelled", "order", data.order_ref, f"paypal_order_id={data.paypal_order_id}")
+        db.commit()
+    return {"order_ref": data.order_ref, "payment_attempt_status": attempt.status,
+            "payment_collected": False}
+
+
+@app.post("/payments/paypal/capture")
+def capture_paypal_checkout(data: PayPalCapture, db: Session = Depends(get_db)):
+    attempt = db.scalar(select(PaymentAttempt).where(
+        PaymentAttempt.order_ref == data.order_ref,
+        PaymentAttempt.provider_order_id == data.paypal_order_id,
+        PaymentAttempt.provider == "paypal"
+    ))
+    if not attempt:
+        raise HTTPException(404, "PayPal checkout attempt not found")
+    order = db.scalar(select(CustomerOrder).where(CustomerOrder.order_ref == data.order_ref))
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if attempt.status == "captured" and order.status == "payment_confirmed":
+        return {"order_ref": order.order_ref, "status": order.status, "idempotent": True}
+    if order.status != "pending_payment":
+        raise HTTPException(409, "Order is not awaiting payment")
+    try:
+        result = paypal_capture_order(data.paypal_order_id, order_ref=order.order_ref)
+    except (ProviderNotConfigured, ProviderRequestError) as exc:
+        raise HTTPException(502, str(exc)[:250])
+    units = result.get("purchase_units") or []
+    captures = ((units[0].get("payments") or {}).get("captures") or []) if units else []
+    capture = captures[0] if captures else {}
+    amount = capture.get("amount") or {}
+    if capture.get("status") != "COMPLETED":
+        raise HTTPException(409, "PayPal capture is not completed")
+    if amount.get("currency_code") != order.currency or amount.get("value") != f"{order.total_amount:.2f}":
+        raise HTTPException(409, "Captured amount or currency does not match the ProfitBot order")
+    attempt.status = "captured"
+    attempt.updated_at = datetime.now(timezone.utc)
+    order.status = "payment_confirmed"
+    order.payment_reference = "PayPal:" + str(capture.get("id") or data.paypal_order_id)
+    order.updated_at = datetime.now(timezone.utc)
+    audit(db, "paypal_payment_captured", "order", order.order_ref, f"capture_id={capture.get('id')}")
+    notify_customer(db, order, "payment_confirmed", "ProfitBot payment confirmed",
+                    f"Your ProfitBot order {order.order_ref} has been paid successfully. We will update you when fulfillment begins.")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status, "payment_reference": order.payment_reference}
+
+
+@app.post("/webhooks/paypal")
+async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
+    try:
+        event = await request.json()
+        if not isinstance(event, dict):
+            raise ValueError("Webhook body must be a JSON object")
+        valid = paypal_verify_webhook(dict(request.headers), event)
+    except (ProviderNotConfigured, ProviderRequestError, ValueError):
+        raise HTTPException(400, "PayPal webhook could not be verified")
+    if not valid:
+        raise HTTPException(401, "Invalid PayPal webhook signature")
+    resource = event.get("resource") or {}
+    related = ((resource.get("supplementary_data") or {}).get("related_ids") or {})
+    paypal_order_id = related.get("order_id")
+    if event.get("event_type") == "PAYMENT.CAPTURE.COMPLETED" and paypal_order_id:
+        attempt = db.scalar(select(PaymentAttempt).where(PaymentAttempt.provider_order_id == paypal_order_id))
+        if attempt and attempt.status != "captured":
+            order = db.scalar(select(CustomerOrder).where(CustomerOrder.order_ref == attempt.order_ref))
+            amount = resource.get("amount") or {}
+            if order and order.status == "pending_payment" and resource.get("status") == "COMPLETED" and amount.get("currency_code") == order.currency and amount.get("value") == f"{order.total_amount:.2f}":
+                attempt.status = "captured"
+                attempt.updated_at = datetime.now(timezone.utc)
+                order.status = "payment_confirmed"
+                order.payment_reference = "PayPal:" + str(resource.get("id") or paypal_order_id)
+                order.updated_at = datetime.now(timezone.utc)
+                audit(db, "paypal_webhook_payment_captured", "order", order.order_ref, str(event.get("id", "")))
+                notify_customer(db, order, "payment_confirmed", "ProfitBot payment confirmed",
+                                f"Your ProfitBot order {order.order_ref} has been paid successfully.")
+                db.commit()
+    return {"received": True}
+
+
+@app.post("/orders/{order_id}/fulfillment/request", dependencies=[Depends(require_owner)])
+def request_supplier_fulfillment(order_id: int, data: FulfillmentPrepare, db: Session = Depends(get_db)):
+    order = db.get(CustomerOrder, order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.status != "payment_confirmed":
+        raise HTTPException(409, "Customer payment must be confirmed before requesting supplier fulfillment")
+    offer = db.get(SupplierOffer, data.supplier_offer_id)
+    if not offer or offer.product_id != order.product_id or not supplier_offer_is_usable(db, offer, order.destination_country):
+        raise HTTPException(409, "Choose a fresh, verified supplier offer for this product and destination")
+    supplier = db.get(Supplier, offer.supplier_id)
+    if not supplier or supplier.verification_status != "verified":
+        raise HTTPException(409, "Supplier is not verified")
+    if offer.currency != "USD" or offer.shipping_currency != "USD":
+        raise HTTPException(409, "Supplier offer must be recorded in USD until currency conversion is implemented")
+    amount = round(offer.unit_price * order.quantity + (offer.shipping_cost or 0), 2)
+    approval = Approval(action_type="purchase",
+                        description=f"Supplier purchase approval for {order.order_ref}; offer #{offer.id}. {data.evidence_note}",
+                        amount=amount, currency="USD", status="pending")
+    db.add(approval)
+    db.flush()
+    fulfillment = SupplierFulfillment(order_ref=order.order_ref, supplier_id=supplier.id,
+                                       supplier_offer_id=offer.id, provider="cj",
+                                       status="approval_pending", approval_id=approval.id,
+                                       notes=data.evidence_note)
+    db.add(fulfillment)
+    audit(db, "supplier_fulfillment_approval_requested", "order", order.order_ref,
+          f"approval_id={approval.id}; offer_id={offer.id}; estimated_supplier_cost={amount:.2f} USD")
+    db.commit()
+    return {"order_ref": order.order_ref, "fulfillment_id": fulfillment.id,
+            "approval_id": approval.id, "status": fulfillment.status,
+            "estimated_supplier_cost": amount, "currency": "USD",
+            "execution": "not_performed"}
+
+
+@app.post("/orders/{order_id}/fulfillment/create-cj", dependencies=[Depends(require_owner)])
+def create_cj_supplier_order(order_id: int, data: CJOrderCreate, db: Session = Depends(get_db)):
+    import os
+    order = db.get(CustomerOrder, order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    fulfillment = db.scalar(select(SupplierFulfillment).where(
+        SupplierFulfillment.order_ref == order.order_ref
+    ).order_by(desc(SupplierFulfillment.created_at)))
+    if not fulfillment or fulfillment.status not in {"approval_pending", "sandbox_created"}:
+        raise HTTPException(409, "No pending supplier fulfillment approval exists")
+    approval = db.get(Approval, fulfillment.approval_id) if fulfillment.approval_id else None
+    if not approval or approval.status != "approved":
+        raise HTTPException(409, "Explicit purchase approval is required before creating the supplier order")
+    if order.status != "payment_confirmed":
+        raise HTTPException(409, "Customer payment is not confirmed")
+    offer = db.get(SupplierOffer, data.supplier_offer_id)
+    if not offer or offer.id != fulfillment.supplier_offer_id or not offer.supplier_sku or not supplier_offer_is_usable(db, offer, order.destination_country):
+        raise HTTPException(409, "The approved supplier offer must include a CJ SKU")
+    if verified_supplier_offer(db, order.product_id, order.destination_country) is None:
+        raise HTTPException(409, "Supplier stock/shipping verification has expired; re-check the offer")
+    live_enabled = os.getenv("CJ_LIVE_ORDER_CREATION", "false").lower() == "true"
+    if data.confirm_live_creation and not live_enabled:
+        raise HTTPException(409, "Live CJ order creation is disabled on the server; sandbox mode remains active")
+    if fulfillment.status == "sandbox_created" and not data.confirm_live_creation:
+        raise HTTPException(409, "A CJ sandbox order already exists. Do not create duplicates; use explicit live confirmation only after enabling production.")
+    payload = {
+        "orderNumber": order.order_ref,
+        "shippingZip": data.shipping_zip,
+        "shippingCountryCode": order.destination_country,
+        "shippingCountry": data.shipping_country_name,
+        "shippingProvince": data.shipping_province,
+        "shippingCity": data.shipping_city,
+        "shippingPhone": data.shipping_phone,
+        "shippingCustomerName": order.customer_name,
+        "shippingAddress": order.shipping_address,
+        "email": order.customer_email,
+        "logisticName": data.logistic_name,
+        "fromCountryCode": data.from_country_code.upper(),
+        "shopLogisticsType": 2,
+        "orderFlow": 1,
+        "payType": 3,
+        "products": [{"sku": offer.supplier_sku, "quantity": order.quantity,
+                      "storeLineItemId": order.order_ref}],
+    }
+    try:
+        result = cj_create_order_only(payload, allow_live=data.confirm_live_creation)
+    except (ProviderNotConfigured, ProviderRequestError) as exc:
+        raise HTTPException(502, str(exc)[:250])
+    provider_data = result.get("data") or {}
+    provider_order_id = provider_data.get("orderId")
+    if not provider_order_id:
+        raise HTTPException(502, "CJ did not return a supplier order ID")
+    sandbox = not (live_enabled and data.confirm_live_creation)
+    fulfillment.provider_order_id = str(provider_order_id)
+    fulfillment.status = "sandbox_created" if sandbox else "created_unpaid"
+    fulfillment.updated_at = datetime.now(timezone.utc)
+    fulfillment.provider = "cj"
+    fulfillment.notes = (fulfillment.notes + f"\\nCJ order created; paid=false; sandbox={sandbox}").strip()
+    audit(db, "cj_supplier_order_created_unpaid", "order", order.order_ref,
+          f"cj_order_id={provider_order_id}; paid=false; sandbox={sandbox}")
+    db.commit()
+    return {"order_ref": order.order_ref, "cj_order_id": provider_order_id,
+            "fulfillment_status": fulfillment.status,
+            "sandbox": sandbox,
+            "supplier_payment": "not_performed",
+            "next_step": "Pay the supplier manually in CJ after reviewing the order and cost; then record the supplier order reference in the order workflow."}
+
+
+
+@app.post("/orders/{order_id}/fulfillment/confirm-supplier-payment", dependencies=[Depends(require_owner)])
+def confirm_supplier_payment(order_id: int, data: SupplierPaymentConfirmation, db: Session = Depends(get_db)):
+    order = db.get(CustomerOrder, order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.status != "payment_confirmed":
+        raise HTTPException(409, "Customer payment must be confirmed first")
+    fulfillment = db.scalar(select(SupplierFulfillment).where(
+        SupplierFulfillment.order_ref == order.order_ref
+    ).order_by(desc(SupplierFulfillment.created_at)))
+    if not fulfillment or fulfillment.status != "created_unpaid":
+        raise HTTPException(409, "A CJ supplier order in created_unpaid status is required")
+    approval = db.get(Approval, fulfillment.approval_id) if fulfillment.approval_id else None
+    if not approval or approval.status != "approved":
+        raise HTTPException(409, "Approved purchase request is required")
+    fulfillment.status = "supplier_paid"
+    fulfillment.notes = (fulfillment.notes + "\\nManual supplier payment reference: " + data.payment_reference + "\\n" + data.evidence_note).strip()
+    fulfillment.updated_at = datetime.now(timezone.utc)
+    order.status = "supplier_ordered"
+    order.updated_at = datetime.now(timezone.utc)
+    audit(db, "supplier_payment_manually_confirmed", "order", order.order_ref,
+          f"payment_reference={data.payment_reference}; supplier payment executed outside ProfitBot")
+    notify_customer(db, order, "supplier_ordered", "Your order is being prepared",
+                    f"Your order {order.order_ref} has been placed with the supplier. Tracking details will follow after dispatch.")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status,
+            "fulfillment_status": fulfillment.status,
+            "supplier_payment": "manually_recorded_not_executed_by_profitbot"}
+
+
+@app.post("/tracking/register", dependencies=[Depends(require_owner)])
+def register_shipment_tracking(data: TrackingRegistration, db: Session = Depends(get_db)):
+    order = db.scalar(select(CustomerOrder).where(CustomerOrder.order_ref == data.order_ref))
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.status not in {"supplier_ordered", "shipped"}:
+        raise HTTPException(409, "Mark the supplier order as placed before registering shipment tracking")
+    existing_tracking = db.scalar(select(ShipmentTracking).where(ShipmentTracking.tracking_number == data.tracking_number))
+    if existing_tracking:
+        if existing_tracking.order_ref == order.order_ref:
+            return {"order_ref": order.order_ref, "status": order.status,
+                    "tracking_number": existing_tracking.tracking_number, "idempotent": True}
+        raise HTTPException(409, "This tracking number is already assigned to another order")
+    if not tracking_configured():
+        raise HTTPException(503, "17TRACK API key is not configured")
+    try:
+        result = tracking_register(data.tracking_number, data.carrier_code)
+    except (ProviderNotConfigured, ProviderRequestError) as exc:
+        raise HTTPException(502, str(exc)[:250])
+    accepted = ((result.get("data") or {}).get("accepted") or [])
+    if not accepted:
+        rejected = ((result.get("data") or {}).get("rejected") or [])
+        raise HTTPException(409, "17TRACK rejected the tracking number: " + str(rejected[:1])[:180])
+    tracking = ShipmentTracking(order_ref=order.order_ref, tracking_number=data.tracking_number,
+                                carrier=str(data.carrier_code) if data.carrier_code else None,
+                                provider="17track", status="registered")
+    db.add(tracking)
+    order.tracking_number = data.tracking_number
+    order.status = "shipped"
+    order.updated_at = datetime.now(timezone.utc)
+    audit(db, "shipment_tracking_registered", "order", order.order_ref,
+          f"provider=17track; tracking={data.tracking_number}")
+    notify_customer(db, order, "shipped", "Your ProfitBot order has shipped",
+                    f"Your order {order.order_ref} has shipped. Tracking number: {data.tracking_number}")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status, "tracking_number": data.tracking_number}
+
+
+@app.post("/webhooks/17track")
+async def tracking_webhook(request: Request, db: Session = Depends(get_db)):
+    raw_body = await request.body()
+    if not tracking_verify_webhook(raw_body, request.headers.get("sign")):
+        raise HTTPException(401, "Invalid 17TRACK webhook signature")
+    try:
+        event = __import__("json").loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise HTTPException(400, "Invalid tracking webhook payload")
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Tracking webhook must be a JSON object")
+    data = event.get("data") or {}
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Invalid tracking webhook data")
+    number = data.get("number")
+    tracking = db.scalar(select(ShipmentTracking).where(ShipmentTracking.tracking_number == number))
+    if not tracking:
+        return {"received": True, "matched": False}
+    order = db.scalar(select(CustomerOrder).where(CustomerOrder.order_ref == tracking.order_ref))
+    track_info = data.get("track_info") or {}
+    latest_status = (track_info.get("latest_status") or {}).get("status") or event.get("event", "updated")
+    latest_event = track_info.get("latest_event") or {}
+    description = latest_event.get("description") or latest_event.get("description_translation", {}).get("description") or ""
+    changed = tracking.status != latest_status or tracking.last_checkpoint != description
+    tracking.status = str(latest_status)[:40]
+    tracking.last_checkpoint = str(description)[:2000]
+    tracking.checked_at = datetime.now(timezone.utc)
+    if order and str(latest_status).casefold() == "delivered" and order.status == "shipped":
+        order.status = "delivered"
+        order.updated_at = datetime.now(timezone.utc)
+    if order and changed:
+        audit(db, "shipment_tracking_updated", "order", order.order_ref,
+              f"status={latest_status}; checkpoint={description[:300]}")
+        notify_customer(db, order, "tracking_updated", "ProfitBot shipment update",
+                        f"Order {order.order_ref}: {latest_status}. {description}")
+    db.commit()
+    return {"received": True, "matched": True, "status": tracking.status}
+
+
+@app.get("/track/{order_ref}")
+def public_order_tracking(order_ref: str, email: str, db: Session = Depends(get_db)):
+    order = db.scalar(select(CustomerOrder).where(CustomerOrder.order_ref == order_ref))
+    if not order or order.customer_email.casefold() != email.strip().casefold():
+        raise HTTPException(404, "Tracking details not found")
+    tracking = db.scalar(select(ShipmentTracking).where(ShipmentTracking.order_ref == order_ref)
+                         .order_by(desc(ShipmentTracking.checked_at)))
+    return {"order_ref": order.order_ref, "product_name": order.product_name,
+            "status": order.status, "tracking_number": tracking.tracking_number if tracking else order.tracking_number,
+            "carrier": tracking.carrier if tracking else None,
+            "tracking_status": tracking.status if tracking else None,
+            "last_checkpoint": tracking.last_checkpoint if tracking else None}
+
 
 @app.post("/approvals", dependencies=[Depends(require_owner)])
 def create_approval(data: ApprovalCreate, db: Session = Depends(get_db)):

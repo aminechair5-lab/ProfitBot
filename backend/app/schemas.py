@@ -204,3 +204,88 @@ class OrderStatusUpdate(BaseModel):
     status: Literal["payment_confirmed", "supplier_ordered", "shipped", "delivered", "cancelled"]
     payment_reference: str | None = Field(default=None, max_length=180)
     tracking_number: str | None = Field(default=None, max_length=180)
+
+
+
+class SupplierVerification(BaseModel):
+    evidence_url: str = Field(min_length=10, max_length=1000)
+    evidence_note: str = Field(min_length=20, max_length=2000)
+    reliability_score: int = Field(ge=60, le=100)
+
+    @field_validator("evidence_url")
+    @classmethod
+    def evidence_url_is_http(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("evidence_url must be an absolute HTTP or HTTPS URL")
+        return value.strip()
+
+
+class SupplierOfferVerification(BaseModel):
+    evidence_url: str = Field(min_length=10, max_length=1000)
+    evidence_note: str = Field(min_length=20, max_length=2000)
+
+    @field_validator("evidence_url")
+    @classmethod
+    def evidence_url_is_http(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("evidence_url must be an absolute HTTP or HTTPS URL")
+        return value.strip()
+
+
+class PayPalCheckoutCreate(BaseModel):
+    order_ref: str = Field(min_length=5, max_length=40)
+    return_url: str = Field(min_length=10, max_length=1000)
+    cancel_url: str = Field(min_length=10, max_length=1000)
+
+    @field_validator("return_url", "cancel_url")
+    @classmethod
+    def checkout_urls_must_be_https(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Checkout return and cancel URLs must be absolute HTTPS URLs")
+        return value.strip()
+
+
+class PayPalCapture(BaseModel):
+    order_ref: str = Field(min_length=5, max_length=40)
+    paypal_order_id: str = Field(min_length=5, max_length=120)
+
+
+class TrackingRegistration(BaseModel):
+    order_ref: str = Field(min_length=5, max_length=40)
+    tracking_number: str = Field(min_length=5, max_length=180)
+    carrier_code: int | None = Field(default=None, gt=0)
+
+
+class FulfillmentPrepare(BaseModel):
+    supplier_offer_id: int = Field(gt=0)
+    evidence_note: str = Field(min_length=10, max_length=1000)
+
+
+
+class CJOrderCreate(BaseModel):
+    shipping_country_name: str = Field(min_length=2, max_length=50)
+    shipping_province: str = Field(min_length=2, max_length=50)
+    shipping_city: str = Field(min_length=2, max_length=50)
+    shipping_zip: str = Field(default="", max_length=20)
+    shipping_phone: str = Field(default="", max_length=30)
+    logistic_name: str = Field(min_length=2, max_length=50)
+    from_country_code: str = Field(default="CN", min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
+    supplier_offer_id: int = Field(gt=0)
+    confirm_live_creation: bool = False
+
+    @field_validator("from_country_code")
+    @classmethod
+    def origin_country_must_exclude_algeria(cls, value: str) -> str:
+        value = value.upper()
+        if value == "DZ":
+            raise ValueError("Algeria is excluded from ProfitBot supplier and shipping operations")
+        return value
+
+
+
+class SupplierPaymentConfirmation(BaseModel):
+    payment_reference: str = Field(min_length=3, max_length=180)
+    evidence_note: str = Field(min_length=10, max_length=1000)

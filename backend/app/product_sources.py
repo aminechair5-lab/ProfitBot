@@ -90,22 +90,26 @@ PRODUCT_TERMS = {
 }
 
 SHOPPING_TERMS = [
-    "best", "review", "reviews", "buy", "deal", "bestseller", "best seller", "best sellers",
-    "product launch", "product review", "kaufen", "test", "preis", "bestseller",
-    "acheter", "avis", "prix", "comprar", "reseña", "precio", "recensione", "prezzo",
-    "kopen", "prijs", "köpa", "pris", "おすすめ", "レビュー", "購入", "melhor", "avaliação",
+    "best", "review", "reviews", "buy", "deal", "price", "bestseller", "best seller", "best sellers",
+    "product launch", "product review", "tested", "comparison", "versus", "new model", "unveiled",
+    "kaufen", "test", "preis", "bestseller", "vergleich", "bewertung", "neuheit",
+    "acheter", "avis", "prix", "comparatif", "nouveauté", "comprar", "reseña", "precio", "comparativa",
+    "recensione", "prezzo", "confronto", "novità", "kopen", "prijs", "vergelijking", "köpa", "pris",
+    "jämförelse", "おすすめ", "レビュー", "購入", "比較", "価格", "melhor", "avaliação", "teste",
 ]
 
 QUERY_BY_LANGUAGE = {
-    "en": '("best sellers" OR "best selling products" OR "viral products" OR "product review" OR "new gadgets" OR "product launch" OR "shopping trends")',
-    "de": '(Bestseller OR Produktneuheiten OR Produkttest OR Heißluftfritteuse OR Saugroboter OR Kopfhörer)',
-    "fr": '("meilleures ventes" OR nouveautés produits OR test produit OR friteuse sans huile OR aspirateur robot)',
-    "es": '("más vendidos" OR novedades productos OR reseña producto OR freidora de aire OR aspiradora robot)',
-    "it": '("più venduti" OR novità prodotti OR recensione prodotto OR friggitrice ad aria)',
-    "nl": '(bestsellers OR productreviews OR productnieuws OR airfryer OR robotstofzuiger)',
-    "sv": '(bästsäljare OR produktrecension OR produktnyheter OR luftrenare)',
-    "ja": '(売れ筋 OR 商品レビュー OR 新商品 OR エアフライヤー OR ロボット掃除機)',
-    "pt": '("mais vendidos" OR lançamento produto OR avaliação produto OR fritadeira sem óleo)',
+    # Product nouns are intentionally concrete; generic retail and shopping-news queries
+    # previously produced many irrelevant headlines.
+    "en": '("wireless earbuds" OR "air fryer" OR "robot vacuum" OR "portable blender" OR "face serum" OR "running shoes" OR "dog harness" OR "board game") (review OR tested OR comparison OR "best" OR launch OR price)',
+    "de": '(Heißluftfritteuse OR Saugroboter OR Kopfhörer OR Gesichtspflege OR Laufschuhe OR Hundegeschirr OR Brettspiel) (Test OR Vergleich OR Preis OR Bewertung OR Neuheit)',
+    "fr": '("friteuse sans huile" OR "aspirateur robot" OR "écouteurs sans fil" OR "sérum visage" OR "chaussures de running" OR "harnais pour chien") (test OR comparatif OR prix OR avis OR nouveauté)',
+    "es": '("freidora de aire" OR "aspiradora robot" OR "auriculares inalámbricos" OR "suero facial" OR "zapatillas de running" OR "arnés para perro") (prueba OR comparativa OR precio OR reseña OR novedad)',
+    "it": '("friggitrice ad aria" OR "robot aspirapolvere" OR "auricolari wireless" OR "siero viso" OR "scarpe da running") (test OR confronto OR prezzo OR recensione OR novità)',
+    "nl": '(airfryer OR robotstofzuiger OR koptelefoon OR gezichtsserum OR hardloopschoenen OR hondenharnas) (test OR vergelijking OR prijs OR review OR nieuw)',
+    "sv": '(luftrenare OR hörlurar OR löparskor OR ryggsäck OR kattströ) (test OR jämförelse OR pris OR recension OR nyhet)',
+    "ja": '(エアフライヤー OR ロボット掃除機 OR ワイヤレスイヤホン OR 美容液 OR スニーカー OR 猫砂) (レビュー OR 比較 OR 価格 OR 新商品)',
+    "pt": '("fritadeira sem óleo" OR "aspirador robô" OR "fone sem fio" OR "sérum facial" OR "tênis de corrida") (teste OR comparação OR preço OR avaliação OR lançamento)',
 }
 
 
@@ -131,8 +135,18 @@ def classify_product_coverage(title: str):
         matches.extend(hits)
     if not matches:
         return None
+    # Exclude broad editorial noise even when a product word appears incidentally.
+    non_product_context = [
+        "best selling books", "bestselling books", "book bestseller", "novel", "fiction books",
+        "holiday shopping trends", "shopping trends", "retail sales", "retail market report",
+        "consumer confidence", "store opening", "retailers", "gift guide", "gift ideas",
+    ]
+    if any(_has_phrase(normalized, term) for term in non_product_context):
+        return None
     shopping_hits = [term for term in SHOPPING_TERMS if _has_phrase(normalized, term)]
-    score = min(85, 55 + min(15, (len(matches) - 1) * 5) + (10 if shopping_hits else 0))
+    if not shopping_hits:
+        return None
+    score = min(90, 55 + min(15, (len(matches) - 1) * 5) + min(15, len(shopping_hits) * 5))
     return {
         "category": category,
         "matched_product_terms": matches[:6],

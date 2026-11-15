@@ -123,3 +123,57 @@ class TrendSignal(Base):
     matched_terms: Mapped[str] = mapped_column(Text, default="")
     published_at: Mapped[str | None] = mapped_column(String(80), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+
+class PaymentAttempt(Base):
+    __tablename__ = "payment_attempts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    order_ref: Mapped[str] = mapped_column(ForeignKey("customer_orders.order_ref"), index=True)
+    provider: Mapped[str] = mapped_column(String(30), default="paypal")
+    provider_order_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="created", index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class SupplierFulfillment(Base):
+    __tablename__ = "supplier_fulfillments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    order_ref: Mapped[str] = mapped_column(ForeignKey("customer_orders.order_ref"), index=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
+    supplier_offer_id: Mapped[int] = mapped_column(ForeignKey("supplier_offers.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(30), default="manual")
+    provider_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="approval_pending", index=True)
+    approval_id: Mapped[int | None] = mapped_column(ForeignKey("approvals.id"), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ShipmentTracking(Base):
+    __tablename__ = "shipment_tracking"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    order_ref: Mapped[str] = mapped_column(ForeignKey("customer_orders.order_ref"), index=True)
+    tracking_number: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    carrier: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    provider: Mapped[str] = mapped_column(String(30), default="manual")
+    status: Mapped[str] = mapped_column(String(40), default="registered")
+    last_checkpoint: Mapped[str] = mapped_column(Text, default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class NotificationLog(Base):
+    __tablename__ = "notification_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    order_ref: Mapped[str | None] = mapped_column(ForeignKey("customer_orders.order_ref"), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    channel: Mapped[str] = mapped_column(String(30), default="email")
+    recipient: Mapped[str] = mapped_column(String(254))
+    status: Mapped[str] = mapped_column(String(30), default="queued")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
