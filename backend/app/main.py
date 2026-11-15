@@ -1053,7 +1053,7 @@ def create_cj_supplier_order(order_id: int, data: CJOrderCreate, db: Session = D
     fulfillment = db.scalar(select(SupplierFulfillment).where(
         SupplierFulfillment.order_ref == order.order_ref
     ).order_by(desc(SupplierFulfillment.created_at)))
-    if not fulfillment or fulfillment.status != "approval_pending":
+    if not fulfillment or fulfillment.status not in {"approval_pending", "sandbox_created"}:
         raise HTTPException(409, "No pending supplier fulfillment approval exists")
     approval = db.get(Approval, fulfillment.approval_id) if fulfillment.approval_id else None
     if not approval or approval.status != "approved":
@@ -1095,17 +1095,18 @@ def create_cj_supplier_order(order_id: int, data: CJOrderCreate, db: Session = D
     provider_order_id = provider_data.get("orderId")
     if not provider_order_id:
         raise HTTPException(502, "CJ did not return a supplier order ID")
+    sandbox = not (live_enabled and data.confirm_live_creation)
     fulfillment.provider_order_id = str(provider_order_id)
-    fulfillment.status = "created_unpaid"
+    fulfillment.status = "sandbox_created" if sandbox else "created_unpaid"
     fulfillment.updated_at = datetime.now(timezone.utc)
     fulfillment.provider = "cj"
-    fulfillment.notes = (fulfillment.notes + f"\\nCJ order created; paid=false; sandbox={not (live_enabled and data.confirm_live_creation)}").strip()
+    fulfillment.notes = (fulfillment.notes + f"\\nCJ order created; paid=false; sandbox={sandbox}").strip()
     audit(db, "cj_supplier_order_created_unpaid", "order", order.order_ref,
-          f"cj_order_id={provider_order_id}; paid=false")
+          f"cj_order_id={provider_order_id}; paid=false; sandbox={sandbox}")
     db.commit()
     return {"order_ref": order.order_ref, "cj_order_id": provider_order_id,
             "fulfillment_status": fulfillment.status,
-            "sandbox": not (live_enabled and data.confirm_live_creation),
+            "sandbox": sandbox,
             "supplier_payment": "not_performed",
             "next_step": "Pay the supplier manually in CJ after reviewing the order and cost; then record the supplier order reference in the order workflow."}
 
