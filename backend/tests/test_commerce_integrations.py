@@ -34,6 +34,14 @@ class CommerceSchemaTests(unittest.TestCase):
         self.assertFalse(data.confirm_live_creation)
         self.assertEqual(data.from_country_code, "CN")
 
+    def test_cj_origin_excludes_algeria(self):
+        with self.assertRaises(ValidationError):
+            CJOrderCreate(
+                shipping_country_name="United States", shipping_province="NY",
+                shipping_city="New York", logistic_name="CJPacket",
+                supplier_offer_id=1, from_country_code="DZ"
+            )
+
     def test_tracking_number_requires_minimum_length(self):
         with self.assertRaises(ValidationError):
             TrackingRegistration(order_ref="PB-123456", tracking_number="123")
