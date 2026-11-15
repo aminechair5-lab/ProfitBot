@@ -50,7 +50,7 @@ def score_values(p: Product):
 
 
 @app.get("/signals/trends", dependencies=[Depends(require_owner)])
-def google_trend_signals(geo: str = "DZ"):
+def google_trend_signals(geo: str = "US"):
     """Classify public trending searches as product-related candidates, never as verified sales."""
     import re
     import urllib.error
@@ -61,6 +61,8 @@ def google_trend_signals(geo: str = "DZ"):
     country = geo.upper().strip()
     if not re.fullmatch(r"[A-Z]{2}", country):
         raise HTTPException(400, "geo must be a two-letter country code")
+    if country == "DZ":
+        raise HTTPException(400, "The Algerian market is not supported by ProfitBot target-market discovery")
 
     url = f"https://trends.google.com/trending/rss?geo={country}"
     request = urllib.request.Request(
@@ -167,6 +169,8 @@ def google_trend_signals(geo: str = "DZ"):
     return {
         "source": "Google Trends Trending RSS",
         "geo": country,
+        "market_scope": "international_only",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "scanned_count": scanned_count,
         "count": len(candidates[:20]),
         "excluded_count": rejected_count,
