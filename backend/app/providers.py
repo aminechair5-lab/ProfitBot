@@ -11,6 +11,7 @@ import json
 import hashlib
 import hmac
 import smtplib
+import uuid
 from email.message import EmailMessage
 import os
 import urllib.error
@@ -90,7 +91,7 @@ def paypal_create_order(*, order_ref: str, amount: str, currency: str,
     return _json_request(
         _paypal_base() + "/v2/checkout/orders",
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
-                 "PayPal-Request-Id": "profitbot-" + order_ref + "-create"},
+                 "PayPal-Request-Id": "profitbot-create-" + uuid.uuid4().hex},
         payload={
             "intent": "CAPTURE",
             "purchase_units": [{
@@ -113,7 +114,7 @@ def paypal_capture_order(paypal_order_id: str, *, order_ref: str) -> dict[str, A
     return _json_request(
         _paypal_base() + "/v2/checkout/orders/" + urllib.parse.quote(paypal_order_id, safe="") + "/capture",
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
-                 "PayPal-Request-Id": "profitbot-" + order_ref + "-capture"},
+                 "PayPal-Request-Id": "profitbot-capture-" + paypal_order_id},
         payload={},
     )
 
