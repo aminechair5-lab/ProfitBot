@@ -38,7 +38,7 @@ def eligibility_reasons(p: Product, score: float, net: float, margin: float):
     import re
     market = str(getattr(p, "target_market", "") or "").strip().upper()
     has_excluded_market = bool(
-        re.search(r"(^|[\\s,;/|])DZ($|[\\s,;/|])", market)
+        re.search(r"(^|[\s,;/|])DZ($|[\s,;/|])", market)
         or "ALGERIA" in market
         or "الجزائر" in market
     )
@@ -46,9 +46,9 @@ def eligibility_reasons(p: Product, score: float, net: float, margin: float):
         reasons.append("السوق الجزائري غير مسموح في ProfitBot")
     if p.selling_price <= 0:
         reasons.append("أدخل سعر بيع موجباً")
-    if not (p.supplier_name or "").strip():
+    if not str(getattr(p, "supplier_name", "") or "").strip():
         reasons.append("أضف اسم المورد")
-    if not (p.source_url or "").strip():
+    if not str(getattr(p, "source_url", "") or "").strip():
         reasons.append("أضف رابط مصدر المنتج")
     if net <= 0:
         reasons.append("صافي الربح التقديري يجب أن يكون موجباً")
@@ -56,9 +56,9 @@ def eligibility_reasons(p: Product, score: float, net: float, margin: float):
         reasons.append("الهامش أقل من الحد الأدنى 15%")
     if score < 70:
         reasons.append("الدرجة أقل من الحد الأدنى 70")
-    if p.supplier_reliability < 60:
+    if getattr(p, "supplier_reliability", 0) < 60:
         reasons.append("موثوقية المورد أقل من 60/100")
-    if p.shipping_score < 50:
+    if getattr(p, "shipping_score", 0) < 50:
         reasons.append("درجة الشحن أقل من 50/100")
     return reasons
 
