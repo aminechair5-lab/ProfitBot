@@ -19,7 +19,9 @@ ProfitBot is an owner-operated product research and decision-support tool. It is
 - No live PayPal, RedotPay or card-processing integration is enabled; the public order form records a preliminary request only and does not collect money.
 - Supplier purchase orders, automated fulfillment, carrier tracking sync, customer email notifications and refunds are not connected.
 - Supplier offers and inventory are manually entered and remain unverified until independently checked.
-- Public order intake has a basic persistent per-email throttle (3 submissions per 15 minutes), but still needs stronger bot/IP abuse controls, a privacy/retention policy and a customer-support process before a paid launch.
+- Public order intake has a persistent per-email throttle (3 submissions per 15 minutes) and a hidden honeypot field. These are basic deterrents, not comprehensive bot/IP protection; add edge-level abuse controls, a published privacy/retention policy and a customer-support process before a paid launch.
+- The owner orders API does not return the customer's full delivery address; access to stored personal data should remain limited and governed by a documented retention/deletion process.
+- Product publication is blocked unless the calculated eligibility gate passes: score >= 70, positive net profit, margin >= 15%, supplier reliability >= 60 and shipping score >= 50. These are screening thresholds, not proof of demand or supplier verification.
 - Approval decisions are records only. They do not execute the requested action.
 - No verified sales/order data is connected, so realized monthly net profit is unavailable.
 - Google Trends measures search interest, not sales volume or guaranteed purchase intent.

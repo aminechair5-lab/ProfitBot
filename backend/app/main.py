@@ -369,6 +369,12 @@ def publish_product(product_id: int, db: Session = Depends(get_db)):
     score, eligible, net, margin = score_values(product)
     if product.selling_price <= 0 or net <= 0 or not product.supplier_name or not product.source_url:
         raise HTTPException(400, "Before publishing, add a supplier, source URL, positive selling price and positive estimated net profit")
+    if not eligible:
+        raise HTTPException(
+            409,
+            "Product is not eligible for publication. Required: score >= 70, margin >= 15%, "
+            "supplier reliability >= 60 and shipping score >= 50, with positive net profit."
+        )
     product.status = "published"
     product.score = score
     audit(db, "product_published", "product", product.id, "public storefront; supplier and fulfilment still require manual confirmation")
@@ -427,7 +433,7 @@ def list_customer_orders(db: Session = Depends(get_db)):
         "id": o.id, "order_ref": o.order_ref, "product_name": o.product_name, "quantity": o.quantity,
         "total_amount": o.total_amount, "currency": o.currency, "customer_name": o.customer_name,
         "customer_email": o.customer_email, "destination_country": o.destination_country,
-        "shipping_address": o.shipping_address, "status": o.status, "payment_reference": o.payment_reference,
+        "status": o.status, "payment_reference": o.payment_reference,
         "tracking_number": o.tracking_number, "created_at": o.created_at
     } for o in rows]
 

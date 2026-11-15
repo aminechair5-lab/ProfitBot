@@ -164,6 +164,15 @@ class StoreOrderCreate(BaseModel):
     customer_email: str = Field(min_length=6, max_length=254)
     destination_country: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
     shipping_address: str = Field(min_length=8, max_length=1000)
+    # Hidden honeypot: real customers leave this field empty; basic bots often fill it.
+    website: str = Field(default="", max_length=200)
+
+    @field_validator("website")
+    @classmethod
+    def honeypot_must_be_empty(cls, value: str) -> str:
+        if value.strip():
+            raise ValueError("Invalid order request")
+        return ""
 
     @field_validator("customer_name")
     @classmethod
