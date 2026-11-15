@@ -39,6 +39,12 @@ class SpecializedProductSourceTests(unittest.TestCase):
         self.assertIsNone(classify_product_coverage("Josh Downs scores a late touchdown"))
         self.assertIsNone(classify_product_coverage("Missouri vs Marquette live score"))
 
+    def test_requires_shopping_context_even_when_a_product_word_appears(self):
+        self.assertIsNone(classify_product_coverage("Air fryer arrives in a new kitchen showroom"))
+
+    def test_rejects_generic_books_and_gift_guides(self):
+        self.assertIsNone(classify_product_coverage("Best selling books and gift ideas for the holidays"))
+
     @patch("app.product_sources.urllib.request.urlopen")
     def test_fetches_market_localized_google_news_rss(self, urlopen):
         payload = (
