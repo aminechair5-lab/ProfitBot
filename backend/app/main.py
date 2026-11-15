@@ -11,7 +11,7 @@ from .db import Base, engine, get_db
 from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal
 from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate
 from .security import require_owner
-from .product_sources import discover_product_articles, MARKET_LOCALES
+from .product_sources import discover_product_articles, MARKET_LOCALES, normalize
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
@@ -409,7 +409,7 @@ def discover_specialized_product_markets(markets: str = "US,GB,DE,CA"):
                 "source": result["source"],
             })
             for item in result["items"]:
-                key = re.sub(r"[^\\w]+", " ", item["title"].casefold(), flags=re.UNICODE).strip()
+                key = normalize(item["title"])
                 if not key:
                     continue
                 current = grouped.setdefault(key, {
