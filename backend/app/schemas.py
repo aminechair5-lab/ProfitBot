@@ -262,3 +262,16 @@ class TrackingRegistration(BaseModel):
 class FulfillmentPrepare(BaseModel):
     supplier_offer_id: int = Field(gt=0)
     evidence_note: str = Field(min_length=10, max_length=1000)
+
+
+
+class CJOrderCreate(BaseModel):
+    shipping_country_name: str = Field(min_length=2, max_length=50)
+    shipping_province: str = Field(min_length=2, max_length=50)
+    shipping_city: str = Field(min_length=2, max_length=50)
+    shipping_zip: str = Field(default="", max_length=20)
+    shipping_phone: str = Field(default="", max_length=30)
+    logistic_name: str = Field(min_length=2, max_length=50)
+    from_country_code: str = Field(default="CN", min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
+    supplier_offer_id: int = Field(gt=0)
+    confirm_live_creation: bool = False
