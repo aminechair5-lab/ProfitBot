@@ -194,11 +194,11 @@ def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
         value = unicodedata.normalize("NFKC", value).casefold()
         value = "".join(char for char in unicodedata.normalize("NFKD", value)
                         if not unicodedata.combining(char))
-        return re.sub(r"[^\\w]+", " ", value, flags=re.UNICODE).strip()
+        return re.sub(r"[^\w]+", " ", value, flags=re.UNICODE).strip()
 
     def has_phrase(normalized: str, term: str):
         phrase = normalize_title(term)
-        return bool(phrase and re.search(r"(?<!\\w)" + re.escape(phrase) + r"(?!\\w)", normalized, flags=re.UNICODE))
+        return bool(phrase and re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", normalized, flags=re.UNICODE))
 
     def classify(title: str):
         normalized = normalize_title(title)
