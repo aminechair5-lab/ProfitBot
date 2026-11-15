@@ -29,29 +29,35 @@ def audit(db: Session, event_type: str, entity_type: str, entity_id: str, detail
     db.add(AuditEvent(event_type=event_type, entity_type=entity_type, entity_id=str(entity_id), detail=detail))
 
 
+def supplier_offer_is_usable(db: Session, offer: SupplierOffer, market: str) -> bool:
+    market = market.strip().upper()
+    if not market or market == "DZ" or offer.verification_status != "verified":
+        return False
+    if offer.stock_status != "in_stock" or offer.shipping_cost is None:
+        return False
+    if offer.shipping_days_min is None or offer.shipping_days_max is None:
+        return False
+    checked_at = offer.checked_at
+    if checked_at is None:
+        return False
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+    if checked_at < datetime.now(timezone.utc) - timedelta(hours=24):
+        return False
+    destinations = {part.strip().upper() for part in offer.destination_markets.replace(";", ",").split(",")}
+    supplier = db.get(Supplier, offer.supplier_id)
+    return market in destinations and supplier is not None and supplier.verification_status == "verified"
+
+
 def verified_supplier_offer(db: Session, product_id: int, market: str):
     """Return only a recently checked, in-stock offer from a verified supplier."""
     market = market.strip().upper()
     if not market or market == "DZ":
         return None
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    rows = db.scalars(
-        select(SupplierOffer).join(Supplier, Supplier.id == SupplierOffer.supplier_id).where(
-            SupplierOffer.product_id == product_id,
-            SupplierOffer.verification_status == "verified",
-            SupplierOffer.stock_status == "in_stock",
-            SupplierOffer.shipping_cost.is_not(None),
-            SupplierOffer.shipping_days_min.is_not(None),
-            SupplierOffer.shipping_days_max.is_not(None),
-            SupplierOffer.checked_at >= cutoff,
-            Supplier.verification_status == "verified",
-        ).order_by(desc(SupplierOffer.checked_at))
-    ).all()
-    for offer in rows:
-        destinations = {part.strip().upper() for part in offer.destination_markets.replace(";", ",").split(",")}
-        if market in destinations:
-            return offer
-    return None
+    rows = db.scalars(select(SupplierOffer).where(
+        SupplierOffer.product_id == product_id
+    ).order_by(desc(SupplierOffer.checked_at))).all()
+    return next((offer for offer in rows if supplier_offer_is_usable(db, offer, market)), None)
 
 
 def notify_customer(db: Session, order: CustomerOrder, event_type: str, subject: str, body: str):
@@ -990,7 +996,7 @@ def request_supplier_fulfillment(order_id: int, data: FulfillmentPrepare, db: Se
     if order.status != "payment_confirmed":
         raise HTTPException(409, "Customer payment must be confirmed before requesting supplier fulfillment")
     offer = db.get(SupplierOffer, data.supplier_offer_id)
-    if not offer or offer.product_id != order.product_id or verified_supplier_offer(db, order.product_id, order.destination_country) is None:
+    if not offer or offer.product_id != order.product_id or not supplier_offer_is_usable(db, offer, order.destination_country):
         raise HTTPException(409, "Choose a fresh, verified supplier offer for this product and destination")
     supplier = db.get(Supplier, offer.supplier_id)
     if not supplier or supplier.verification_status != "verified":
@@ -1034,7 +1040,7 @@ def create_cj_supplier_order(order_id: int, data: CJOrderCreate, db: Session = D
     if order.status != "payment_confirmed":
         raise HTTPException(409, "Customer payment is not confirmed")
     offer = db.get(SupplierOffer, data.supplier_offer_id)
-    if not offer or offer.id != fulfillment.supplier_offer_id or not offer.supplier_sku:
+    if not offer or offer.id != fulfillment.supplier_offer_id or not offer.supplier_sku or not supplier_offer_is_usable(db, offer, order.destination_country):
         raise HTTPException(409, "The approved supplier offer must include a CJ SKU")
     if verified_supplier_offer(db, order.product_id, order.destination_country) is None:
         raise HTTPException(409, "Supplier stock/shipping verification has expired; re-check the offer")
