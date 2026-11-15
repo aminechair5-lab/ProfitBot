@@ -17,6 +17,7 @@ class ProductOpportunityDiscoveryTests(unittest.TestCase):
                 {"geo": "CA", "count": 0, "scanned_count": 9},
             ],
             "failures": [],
+            "cross_market_count": 1,
             "items": [
                 {
                     "title": "Air fryer",
