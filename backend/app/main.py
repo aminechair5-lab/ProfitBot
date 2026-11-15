@@ -66,6 +66,69 @@ def verified_supplier_offer(db: Session, product_id: int, market: str):
     ).order_by(desc(SupplierOffer.checked_at))).all()
     return next((offer for offer in rows if supplier_offer_is_usable(db, offer, market)), None)
 
+def opportunity_supplier_readiness(db: Session, candidate_title: str, markets: list[str]) -> dict:
+    """Attach only exact-name, linked, recently verified supplier evidence to a trend candidate."""
+    if db is None:
+        return {"status": "not_checked", "linked_product_id": None, "verified_markets": [], "missing_markets": []}
+
+    candidate_key = normalize(candidate_title)
+    products = db.scalars(select(Product).order_by(desc(Product.created_at)).limit(1000)).all()
+    product = next((row for row in products if normalize(row.name) == candidate_key), None)
+    market_codes = sorted({str(code).strip().upper() for code in markets if str(code).strip().upper() != "DZ"})
+
+    if product is None:
+        return {
+            "status": "no_linked_product",
+            "linked_product_id": None,
+            "verified_markets": [],
+            "missing_markets": market_codes,
+            "note": "لا يوجد منتج مسجل بالاسم المطابق تماماً؛ لم يتم إنشاء منتج تلقائياً.",
+        }
+
+    verified = []
+    missing = []
+    evidence = []
+    for market in market_codes:
+        offer = verified_supplier_offer(db, product.id, market)
+        if offer is None:
+            missing.append(market)
+            continue
+        supplier = db.get(Supplier, offer.supplier_id)
+        verified.append(market)
+        evidence.append({
+            "market": market,
+            "supplier_name": supplier.name if supplier else None,
+            "source_url": offer.source_url,
+            "supplier_sku": offer.supplier_sku,
+            "unit_price": offer.unit_price,
+            "currency": offer.currency,
+            "shipping_cost": offer.shipping_cost,
+            "shipping_currency": offer.shipping_currency,
+            "shipping_days_min": offer.shipping_days_min,
+            "shipping_days_max": offer.shipping_days_max,
+            "stock_status": offer.stock_status,
+            "checked_at": offer.checked_at,
+            "fresh_for_hours": 24,
+        })
+
+    if not market_codes:
+        status = "no_market_codes"
+    elif not missing:
+        status = "verified_for_all_candidate_markets"
+    elif verified:
+        status = "partially_verified"
+    else:
+        status = "no_current_verified_offer"
+    return {
+        "status": status,
+        "linked_product_id": product.id,
+        "verified_markets": verified,
+        "missing_markets": missing,
+        "offers": evidence,
+        "note": "التحقق يقتصر على عروض مرتبطة بالمنتج ومراجعة يدوياً وحديثة خلال 24 ساعة؛ لا يثبت الطلب أو المبيعات أو الربحية.",
+    }
+
+
 def supplier_offer_blockers(db: Session, product: Product) -> list[str]:
     import re
     markets = [code for code in re.findall(
@@ -562,6 +625,7 @@ def discover_product_opportunities(
             "sales_verified": False,
             "profitability_verified": False,
             "recommended_next_step": "تحقق يدوياً من المورد والسعر والمخزون والشحن والرسوم والضرائب والمنافسة.",
+            "supplier_readiness": opportunity_supplier_readiness(db, item["title"], item.get("markets", [])),
         })
 
     ranked = [item for item in ranked if item["market_count"] >= min_markets]
