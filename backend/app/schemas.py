@@ -275,3 +275,9 @@ class CJOrderCreate(BaseModel):
     from_country_code: str = Field(default="CN", min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
     supplier_offer_id: int = Field(gt=0)
     confirm_live_creation: bool = False
+
+
+
+class SupplierPaymentConfirmation(BaseModel):
+    payment_reference: str = Field(min_length=3, max_length=180)
+    evidence_note: str = Field(min_length=10, max_length=1000)
