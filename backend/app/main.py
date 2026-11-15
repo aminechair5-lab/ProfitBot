@@ -9,7 +9,7 @@ from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
 from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal, PaymentAttempt, SupplierFulfillment, ShipmentTracking, NotificationLog
-from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate
+from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate, SupplierPaymentConfirmation
 from .security import require_owner
 from .product_sources import discover_product_articles, MARKET_LOCALES, normalize
 from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
@@ -836,7 +836,13 @@ def list_customer_orders(db: Session = Depends(get_db)):
         "total_amount": o.total_amount, "currency": o.currency, "customer_name": o.customer_name,
         "customer_email": o.customer_email, "destination_country": o.destination_country,
         "status": o.status, "payment_reference": o.payment_reference,
-        "tracking_number": o.tracking_number, "created_at": o.created_at
+        "tracking_number": o.tracking_number, "created_at": o.created_at,
+        "fulfillment_status": (db.scalar(select(SupplierFulfillment.status).where(
+            SupplierFulfillment.order_ref == o.order_ref
+        ).order_by(desc(SupplierFulfillment.created_at)).limit(1)) or None),
+        "cj_order_id": (db.scalar(select(SupplierFulfillment.provider_order_id).where(
+            SupplierFulfillment.order_ref == o.order_ref
+        ).order_by(desc(SupplierFulfillment.created_at)).limit(1)) or None)
     } for o in rows]
 
 
@@ -847,7 +853,7 @@ def update_customer_order(order_id: int, data: OrderStatusUpdate, db: Session = 
         raise HTTPException(404, "Order not found")
     allowed = {
         "pending_payment": {"payment_confirmed", "cancelled"},
-        "payment_confirmed": {"supplier_ordered", "cancelled"},
+        "payment_confirmed": {"cancelled"},
         "supplier_ordered": {"shipped", "cancelled"},
         "shipped": {"delivered"},
         "delivered": set(), "cancelled": set()
@@ -1102,6 +1108,37 @@ def create_cj_supplier_order(order_id: int, data: CJOrderCreate, db: Session = D
             "sandbox": not (live_enabled and data.confirm_live_creation),
             "supplier_payment": "not_performed",
             "next_step": "Pay the supplier manually in CJ after reviewing the order and cost; then record the supplier order reference in the order workflow."}
+
+
+
+@app.post("/orders/{order_id}/fulfillment/confirm-supplier-payment", dependencies=[Depends(require_owner)])
+def confirm_supplier_payment(order_id: int, data: SupplierPaymentConfirmation, db: Session = Depends(get_db)):
+    order = db.get(CustomerOrder, order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.status != "payment_confirmed":
+        raise HTTPException(409, "Customer payment must be confirmed first")
+    fulfillment = db.scalar(select(SupplierFulfillment).where(
+        SupplierFulfillment.order_ref == order.order_ref
+    ).order_by(desc(SupplierFulfillment.created_at)))
+    if not fulfillment or fulfillment.status != "created_unpaid":
+        raise HTTPException(409, "A CJ supplier order in created_unpaid status is required")
+    approval = db.get(Approval, fulfillment.approval_id) if fulfillment.approval_id else None
+    if not approval or approval.status != "approved":
+        raise HTTPException(409, "Approved purchase request is required")
+    fulfillment.status = "supplier_paid"
+    fulfillment.notes = (fulfillment.notes + "\\nManual supplier payment reference: " + data.payment_reference + "\\n" + data.evidence_note).strip()
+    fulfillment.updated_at = datetime.now(timezone.utc)
+    order.status = "supplier_ordered"
+    order.updated_at = datetime.now(timezone.utc)
+    audit(db, "supplier_payment_manually_confirmed", "order", order.order_ref,
+          f"payment_reference={data.payment_reference}; supplier payment executed outside ProfitBot")
+    notify_customer(db, order, "supplier_ordered", "Your order is being prepared",
+                    f"Your order {order.order_ref} has been placed with the supplier. Tracking details will follow after dispatch.")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status,
+            "fulfillment_status": fulfillment.status,
+            "supplier_payment": "manually_recorded_not_executed_by_profitbot"}
 
 
 @app.post("/tracking/register", dependencies=[Depends(require_owner)])
