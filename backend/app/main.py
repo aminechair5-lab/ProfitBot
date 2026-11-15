@@ -867,6 +867,12 @@ def integration_status():
     }
 
 
+@app.get("/payments/paypal/availability")
+def paypal_checkout_availability():
+    import os
+    return {"available": paypal_configured(), "environment": os.getenv("PAYPAL_ENV", "sandbox")}
+
+
 @app.post("/payments/paypal/create-order")
 def create_paypal_checkout(data: PayPalCheckoutCreate, db: Session = Depends(get_db)):
     if not paypal_configured():
