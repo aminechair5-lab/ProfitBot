@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.product_sources import classify_product_coverage, discover_product_articles
+from app.product_sources import classify_product_coverage, discover_product_articles, normalize
 
 
 class FakeResponse:
@@ -26,6 +26,14 @@ class SpecializedProductSourceTests(unittest.TestCase):
         self.assertIn("air fryer", result["matched_product_terms"])
         self.assertEqual(result["signal_type"], "editorial_product_coverage")
         self.assertEqual(result["confidence"], "low")
+
+    def test_title_normalization_keeps_distinct_product_headlines_distinct(self):
+        air_fryer = normalize("Smarte Heißluftfritteusen: Diese Airfryer mit WLAN überzeugen im Test")
+        headphones = normalize("Sony wireless headphones return in a new product launch")
+        self.assertIn("heissluftfritteusen", air_fryer)
+        self.assertIn("airfryer", air_fryer)
+        self.assertIn("headphones", headphones)
+        self.assertNotEqual(air_fryer, headphones)
 
     def test_rejects_generic_people_and_sports_headlines(self):
         self.assertIsNone(classify_product_coverage("Josh Downs scores a late touchdown"))
