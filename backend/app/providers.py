@@ -163,14 +163,14 @@ def cj_access_token() -> str:
     return str(token)
 
 
-def cj_create_order_only(payload: dict[str, Any]) -> dict[str, Any]:
+def cj_create_order_only(payload: dict[str, Any], *, allow_live: bool = False) -> dict[str, Any]:
     """Create a CJ order without confirming it or paying it.
 
     Sandbox is the default. Production order creation requires an explicit server-side
     CJ_LIVE_ORDER_CREATION=true flag. payType=3 is forced in both modes.
     """
     token = cj_access_token()
-    live_enabled = os.getenv("CJ_LIVE_ORDER_CREATION", "false").strip().lower() == "true"
+    live_enabled = allow_live and os.getenv("CJ_LIVE_ORDER_CREATION", "false").strip().lower() == "true"
     request_payload = dict(payload)
     request_payload["payType"] = 3
     if not live_enabled:
