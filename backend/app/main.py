@@ -12,7 +12,7 @@ from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, Cust
 from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate, SupplierPaymentConfirmation
 from .security import require_owner
 from .product_sources import discover_product_articles, MARKET_LOCALES, normalize
-from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
+from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_access_token, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
@@ -961,6 +961,30 @@ def integration_status():
         "tracking_17track": {"configured": tracking_configured()},
         "email_notifications": {"configured": all(__import__("os").getenv(k) for k in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM"))},
         "note": "Missing credentials keep each provider disabled. Supplier payments are never made by ProfitBot."
+    }
+
+
+@app.post("/integrations/cj/test", dependencies=[Depends(require_owner)])
+def test_cj_connection():
+    """Verify CJ API credentials by requesting an access token; never expose the token or create an order."""
+    if not cj_configured():
+        raise HTTPException(503, "CJ_API_KEY is not configured on the server")
+    try:
+        token = cj_access_token()
+    except ProviderNotConfigured:
+        raise HTTPException(503, "CJ_API_KEY is not configured on the server")
+    except ProviderRequestError:
+        raise HTTPException(502, "CJ authentication failed. Check the CJ API key and CJ API response.")
+    if not token:
+        raise HTTPException(502, "CJ authentication did not return a usable access token")
+    return {
+        "provider": "cj_dropshipping",
+        "configured": True,
+        "authenticated": True,
+        "access_token_exposed": False,
+        "order_created": False,
+        "payment_made": False,
+        "message": "CJ authentication succeeded."
     }
 
 
