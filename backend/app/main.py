@@ -35,8 +35,14 @@ def profit_values(p: Product):
 def eligibility_reasons(p: Product, score: float, net: float, margin: float):
     """Return actionable blockers for public listing; this is a screening gate, not verification."""
     reasons = []
-    market = (p.target_market or "").strip().upper()
-    if market == "DZ" or "ALGERIA" in market or "الجزائر" in market:
+    import re
+    market = str(getattr(p, "target_market", "") or "").strip().upper()
+    has_excluded_market = bool(
+        re.search(r"(^|[\\s,;/|])DZ($|[\\s,;/|])", market)
+        or "ALGERIA" in market
+        or "الجزائر" in market
+    )
+    if has_excluded_market:
         reasons.append("السوق الجزائري غير مسموح في ProfitBot")
     if p.selling_price <= 0:
         reasons.append("أدخل سعر بيع موجباً")
