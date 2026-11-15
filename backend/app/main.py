@@ -1012,6 +1012,8 @@ def capture_paypal_checkout(data: PayPalCapture, db: Session = Depends(get_db)):
 async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         event = await request.json()
+        if not isinstance(event, dict):
+            raise ValueError("Webhook body must be a JSON object")
         valid = paypal_verify_webhook(dict(request.headers), event)
     except (ProviderNotConfigured, ProviderRequestError, ValueError):
         raise HTTPException(400, "PayPal webhook could not be verified")
@@ -1212,7 +1214,11 @@ async def tracking_webhook(request: Request, db: Session = Depends(get_db)):
         event = __import__("json").loads(raw_body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(400, "Invalid tracking webhook payload")
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Tracking webhook must be a JSON object")
     data = event.get("data") or {}
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Invalid tracking webhook data")
     number = data.get("number")
     tracking = db.scalar(select(ShipmentTracking).where(ShipmentTracking.tracking_number == number))
     if not tracking:
