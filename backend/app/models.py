@@ -106,3 +106,20 @@ class CustomerOrder(Base):
     tracking_number: Mapped[str | None] = mapped_column(String(180), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class TrendSignal(Base):
+    __tablename__ = "trend_signals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    signal_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(300), index=True)
+    geo: Mapped[str] = mapped_column(String(2), index=True)
+    category: Mapped[str] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(120))
+    source_url: Mapped[str] = mapped_column(String(1000), default="")
+    signal_type: Mapped[str] = mapped_column(String(40), default="search_interest")
+    commercial_score: Mapped[int] = mapped_column(Integer, default=0)
+    confidence: Mapped[str] = mapped_column(String(20), default="low")
+    matched_terms: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
