@@ -24,7 +24,7 @@ ProfitBot is an owner-operated product research and decision-support tool. It is
 - Product publication is blocked unless the calculated eligibility gate passes: score >= 70, positive net profit, margin >= 15%, supplier reliability >= 60 and shipping score >= 50. These are screening thresholds, not proof of demand or supplier verification.
 - Approval decisions are records only. They do not execute the requested action.
 - No verified sales/order data is connected, so realized monthly net profit is unavailable.
-- Google Trends measures search interest, not sales volume or guaranteed purchase intent.
+- Google Trends measures search interest, not sales volume or guaranteed purchase intent. The cross-market comparison endpoint can show repeated keyword candidates across up to four countries; its heuristic relevance score must never be treated as demand, sales, or a forecast. Adding a trend candidate to the product catalog deliberately does not copy that score into the demand field.
 - Eligibility is only a screening result. Verify supplier identity, stock, landed cost, customs, taxes, returns, delivery times and local legal requirements before buying or listing.
 
 ## Run locally

@@ -192,7 +192,8 @@ def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
         "count": len(candidates[:20]),
         "excluded_count": rejected_count,
         "filter": "Phrase-aware product catalog plus shopping-intent and non-commercial topic checks.",
-        "warning": "النتائج إشارات بحث أولية فقط وليست دليلاً على المبيعات أو الربح. يلزم التحقق من المورد والسعر والشحن والرسوم والمنافسة والضرائب.",
+        "score_interpretation": "Heuristic keyword relevance only; not search volume, demand, conversion, sales or profit.",
+        "warning": "النتائج إشارات بحث أولية فقط وليست دليلاً على المبيعات أو الربح. درجة التطابق لا تقيس حجم الطلب. يلزم التحقق من المورد والسعر والشحن والرسوم والمنافسة والضرائب.",
         "items": candidates[:20]
     }
 
@@ -227,6 +228,57 @@ def health():
         "live_integrations": False
     }
 
+
+
+
+@app.get("/signals/trends/markets", dependencies=[Depends(require_owner)])
+def compare_trend_markets(markets: str = "US,GB,DE,CA", db: Session = Depends(get_db)):
+    """Compare public product-related search-interest candidates across a few international markets."""
+    import re
+    requested = list(dict.fromkeys(part.strip().upper() for part in markets.split(",") if part.strip()))
+    if not requested or len(requested) > 4:
+        raise HTTPException(400, "Choose between 1 and 4 markets")
+    if any(not re.fullmatch(r"[A-Z]{2}", code) for code in requested):
+        raise HTTPException(400, "Each market must be a two-letter country code")
+    if "DZ" in requested:
+        raise HTTPException(400, "The Algerian market is not supported by ProfitBot target-market discovery")
+
+    results = []
+    failures = []
+    grouped = {}
+    for country in requested:
+        try:
+            result = google_trend_signals(geo=country, db=db)
+            results.append({"geo": country, "count": result["count"], "scanned_count": result["scanned_count"]})
+            for item in result["items"]:
+                key = re.sub(r"[^a-z0-9]+", " ", item["title"].casefold()).strip()
+                if not key:
+                    continue
+                grouped.setdefault(key, {"title": item["title"], "category": item["category"],
+                    "commercial_score": item["commercial_score"], "confidence": item["confidence"],
+                    "source": item["source"], "source_url": item["url"], "markets": []})
+                grouped[key]["commercial_score"] = max(grouped[key]["commercial_score"], item["commercial_score"])
+                if country not in grouped[key]["markets"]:
+                    grouped[key]["markets"].append(country)
+        except HTTPException as exc:
+            failures.append({"geo": country, "error": str(exc.detail)[:200]})
+
+    items = list(grouped.values())
+    for item in items:
+        item["market_count"] = len(item["markets"])
+        item["cross_market_signal"] = item["market_count"] >= 2
+        item["score_interpretation"] = "Heuristic keyword relevance only; not demand or sales."
+    items.sort(key=lambda item: (item["market_count"], item["commercial_score"]), reverse=True)
+    return {
+        "market_scope": "international_only",
+        "markets_requested": requested,
+        "markets_scanned": results,
+        "failures": failures,
+        "count": len(items),
+        "cross_market_count": sum(1 for item in items if item["cross_market_signal"]),
+        "warning": "تكرار الإشارة بين الأسواق يزيد أولوية الفحص فقط؛ لا يثبت المبيعات أو الطلب المدفوع.",
+        "items": items[:40]
+    }
 
 @app.get("/signals/history", dependencies=[Depends(require_owner)])
 def trend_signal_history(geo: str | None = None, db: Session = Depends(get_db)):
