@@ -11,12 +11,13 @@ class ProductOpportunityDiscoveryTests(unittest.TestCase):
         return {
             "markets_requested": ["US", "GB", "DE", "CA"],
             "markets_scanned": [
-                {"geo": "US", "count": 2},
-                {"geo": "GB", "count": 1},
-                {"geo": "DE", "count": 1},
-                {"geo": "CA", "count": 0},
+                {"geo": "US", "count": 2, "scanned_count": 18},
+                {"geo": "GB", "count": 1, "scanned_count": 16},
+                {"geo": "DE", "count": 1, "scanned_count": 12},
+                {"geo": "CA", "count": 0, "scanned_count": 9},
             ],
             "failures": [],
+            "cross_market_count": 1,
             "items": [
                 {
                     "title": "Air fryer",
@@ -54,6 +55,11 @@ class ProductOpportunityDiscoveryTests(unittest.TestCase):
         self.assertFalse(result["items"][0]["demand_verified"])
         self.assertFalse(result["items"][0]["profitability_verified"])
         self.assertEqual(result["items"][0]["rank"], 1)
+        self.assertEqual(result["cross_market_count"], 1)
+        self.assertEqual(result["successful_market_count"], 4)
+        self.assertEqual(result["failed_market_count"], 0)
+        self.assertEqual(result["rss_items_scanned_total"], 55)
+        self.assertEqual(result["matched_candidates_total"], 4)
 
     @patch("app.main.compare_trend_markets")
     def test_minimum_market_filter(self, compare):
