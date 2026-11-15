@@ -53,7 +53,7 @@ def supplier_offer_is_usable(db: Session, offer: SupplierOffer, market: str) -> 
         return False
     destinations = {part.strip().upper() for part in offer.destination_markets.replace(";", ",").split(",")}
     supplier = db.get(Supplier, offer.supplier_id)
-    return market in destinations and supplier is not None and supplier.country_code != "DZ" and supplier.verification_status == "verified"
+    return market in destinations and supplier is not None and bool(supplier.country_code) and supplier.country_code != "DZ" and supplier.verification_status == "verified"
 
 
 def verified_supplier_offer(db: Session, product_id: int, market: str):
@@ -74,7 +74,7 @@ def opportunity_supplier_readiness(db: Session, candidate_title: str, markets: l
     candidate_key = normalize(candidate_title)
     products = db.scalars(select(Product).order_by(desc(Product.created_at)).limit(1000)).all()
     product = next((row for row in products if normalize(row.name) == candidate_key), None)
-    market_codes = sorted({str(code).strip().upper() for code in markets if str(code).strip().upper() != "DZ"})
+    market_codes = sorted({str(code).strip().upper() for code in markets if str(code).strip() and str(code).strip().upper() != "DZ"})
 
     if product is None:
         return {
