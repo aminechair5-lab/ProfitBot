@@ -40,9 +40,9 @@ jobs:
           import re
           from pathlib import Path
           html = Path("backend/app/storefront.html").read_text(encoding="utf-8")
-          scripts = re.findall(r"<script>([\\s\\S]*?)</script>", html)
+          scripts = re.findall(r"<script>([\s\S]*?)</script>", html)
           if not scripts:
               raise SystemExit("No inline storefront script found")
-          Path("storefront-check.js").write_text("\\n".join(scripts), encoding="utf-8")
+          Path("storefront-check.js").write_text("\n".join(scripts), encoding="utf-8")
           PY
           node --check storefront-check.js
