@@ -37,6 +37,13 @@ def supplier_offer_is_usable(db: Session, offer: SupplierOffer, market: str) -> 
         return False
     if offer.shipping_days_min is None or offer.shipping_days_max is None:
         return False
+    if offer.currency != "USD" or offer.shipping_currency != "USD":
+        return False
+    product = db.get(Product, offer.product_id) if offer.product_id else None
+    if not product or abs(product.supplier_cost - offer.unit_price) > 0.01:
+        return False
+    if abs(product.shipping_cost - float(offer.shipping_cost)) > 0.01:
+        return False
     checked_at = offer.checked_at
     if checked_at is None:
         return False
