@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer
-from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate
+from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder
+from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate
 from .security import require_owner
 
 Base.metadata.create_all(bind=engine)
@@ -185,6 +185,11 @@ def dashboard():
     page = Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
     return HTMLResponse(content=page)
 
+@app.get("/store", response_class=HTMLResponse)
+def public_storefront():
+    page = Path(__file__).with_name("storefront.html").read_text(encoding="utf-8")
+    return HTMLResponse(content=page)
+
 @app.get("/health")
 def health():
     # Verify the database as well as the web process before reporting readiness.
@@ -319,6 +324,98 @@ def list_supplier_offers(supplier_id: int | None = None, product_id: int | None 
         "data_source": row.data_source, "verification_status": row.verification_status,
         "checked_at": row.checked_at
     } for row in rows]
+
+
+@app.post("/products/{product_id}/publish", dependencies=[Depends(require_owner)])
+def publish_product(product_id: int, db: Session = Depends(get_db)):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Product not found")
+    score, eligible, net, margin = score_values(product)
+    if product.selling_price <= 0 or net <= 0 or not product.supplier_name or not product.source_url:
+        raise HTTPException(400, "Before publishing, add a supplier, source URL, positive selling price and positive estimated net profit")
+    product.status = "published"
+    product.score = score
+    audit(db, "product_published", "product", product.id, "public storefront; supplier and fulfilment still require manual confirmation")
+    db.commit()
+    return {"id": product.id, "status": product.status, "score": score,
+            "estimated_net_profit": net, "estimated_margin_pct": margin,
+            "notice": "Listing is visible; supplier stock, shipping and payment are not automatically verified."}
+
+
+@app.get("/store/products")
+def public_store_products(db: Session = Depends(get_db)):
+    rows = db.scalars(select(Product).where(Product.status == "published").order_by(desc(Product.created_at)).limit(100)).all()
+    return [{
+        "id": p.id, "name": p.name, "category": p.category, "target_market": p.target_market,
+        "price": p.selling_price, "currency": "USD", "description": "منتج معروض من متجر ProfitBot. يتم تأكيد التوفر والشحن يدوياً قبل تحصيل أي مبلغ."
+    } for p in rows]
+
+
+@app.post("/store/orders")
+def create_store_order(data: StoreOrderCreate, db: Session = Depends(get_db)):
+    product = db.get(Product, data.product_id)
+    if not product or product.status != "published":
+        raise HTTPException(404, "Product is not available in the store")
+    if product.selling_price <= 0:
+        raise HTTPException(409, "Product price is not configured")
+    import secrets
+    order = CustomerOrder(
+        order_ref="PB-" + secrets.token_hex(5).upper(),
+        product_id=product.id, product_name=product.name, quantity=data.quantity,
+        unit_price=product.selling_price, total_amount=round(product.selling_price * data.quantity, 2),
+        currency="USD", customer_name=data.customer_name, customer_email=data.customer_email,
+        destination_country=data.destination_country, shipping_address=data.shipping_address,
+        status="pending_payment"
+    )
+    db.add(order)
+    db.flush()
+    audit(db, "store_order_created", "order", order.order_ref, "status=pending_payment; payment not collected")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status, "total_amount": order.total_amount,
+            "currency": order.currency,
+            "message": "تم استلام طلبك مبدئياً. لم يتم تحصيل أي مبلغ؛ سيتم تأكيد التوفر والشحن ووسيلة الدفع معك."}
+
+
+@app.get("/orders", dependencies=[Depends(require_owner)])
+def list_customer_orders(db: Session = Depends(get_db)):
+    rows = db.scalars(select(CustomerOrder).order_by(desc(CustomerOrder.created_at)).limit(200)).all()
+    return [{
+        "id": o.id, "order_ref": o.order_ref, "product_name": o.product_name, "quantity": o.quantity,
+        "total_amount": o.total_amount, "currency": o.currency, "customer_name": o.customer_name,
+        "customer_email": o.customer_email, "destination_country": o.destination_country,
+        "shipping_address": o.shipping_address, "status": o.status, "payment_reference": o.payment_reference,
+        "tracking_number": o.tracking_number, "created_at": o.created_at
+    } for o in rows]
+
+
+@app.post("/orders/{order_id}/status", dependencies=[Depends(require_owner)])
+def update_customer_order(order_id: int, data: OrderStatusUpdate, db: Session = Depends(get_db)):
+    order = db.get(CustomerOrder, order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    allowed = {
+        "pending_payment": {"payment_confirmed", "cancelled"},
+        "payment_confirmed": {"supplier_ordered", "cancelled"},
+        "supplier_ordered": {"shipped", "cancelled"},
+        "shipped": {"delivered"},
+        "delivered": set(), "cancelled": set()
+    }
+    if data.status not in allowed.get(order.status, set()):
+        raise HTTPException(409, f"Invalid order transition: {order.status} -> {data.status}")
+    if data.status == "payment_confirmed" and not data.payment_reference:
+        raise HTTPException(400, "Record a verified external payment reference before confirming payment")
+    if data.status == "shipped" and not data.tracking_number:
+        raise HTTPException(400, "Tracking number is required before marking an order shipped")
+    order.status = data.status
+    if data.payment_reference:
+        order.payment_reference = data.payment_reference
+    if data.tracking_number:
+        order.tracking_number = data.tracking_number
+    order.updated_at = datetime.now(timezone.utc)
+    audit(db, "order_status_updated", "order", order.order_ref, f"status={order.status}")
+    db.commit()
+    return {"order_ref": order.order_ref, "status": order.status}
 
 @app.post("/approvals", dependencies=[Depends(require_owner)])
 def create_approval(data: ApprovalCreate, db: Session = Depends(get_db)):
