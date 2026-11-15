@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import hashlib
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pathlib import Path
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder
+from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal
 from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate
 from .security import require_owner
 
@@ -50,7 +51,7 @@ def score_values(p: Product):
 
 
 @app.get("/signals/trends", dependencies=[Depends(require_owner)])
-def google_trend_signals(geo: str = "US"):
+def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
     """Classify public trending searches as product-related candidates, never as verified sales."""
     import re
     import urllib.error
@@ -166,6 +167,22 @@ def google_trend_signals(geo: str = "US"):
             **classification
         })
     candidates.sort(key=lambda row: (row["commercial_score"], row.get("approx_traffic") or ""), reverse=True)
+    observed_at = datetime.now(timezone.utc)
+    for candidate in candidates[:20]:
+        signal_key = hashlib.sha256((country + "|" + candidate["title"].casefold() + "|" + candidate["url"]).encode("utf-8")).hexdigest()
+        saved = db.scalar(select(TrendSignal).where(TrendSignal.signal_key == signal_key))
+        if saved is None:
+            saved = TrendSignal(signal_key=signal_key, title=candidate["title"], geo=country,
+                category=candidate["category"], source=candidate["source"], source_url=candidate["url"],
+                signal_type=candidate["signal_type"], commercial_score=candidate["commercial_score"],
+                confidence=candidate["confidence"], matched_terms=", ".join(candidate["matched_product_terms"]),
+                published_at=candidate["published_at"], observed_at=observed_at)
+            db.add(saved)
+        else:
+            saved.commercial_score = candidate["commercial_score"]
+            saved.confidence = candidate["confidence"]
+            saved.observed_at = observed_at
+    db.commit()
     return {
         "source": "Google Trends Trending RSS",
         "geo": country,
@@ -209,6 +226,24 @@ def health():
         "storage_note": "PostgreSQL configured" if persistent_storage else "SQLite is suitable for local testing; hosted ephemeral filesystems may lose data on restart or redeploy.",
         "live_integrations": False
     }
+
+
+@app.get("/signals/history", dependencies=[Depends(require_owner)])
+def trend_signal_history(geo: str | None = None, db: Session = Depends(get_db)):
+    query = select(TrendSignal).order_by(desc(TrendSignal.observed_at)).limit(300)
+    if geo:
+        country = geo.upper().strip()
+        if len(country) != 2 or country == "DZ":
+            raise HTTPException(400, "Use a supported two-letter international country code")
+        query = query.where(TrendSignal.geo == country)
+    rows = db.scalars(query).all()
+    return [{
+        "id": row.id, "title": row.title, "geo": row.geo, "category": row.category,
+        "source": row.source, "source_url": row.source_url, "signal_type": row.signal_type,
+        "commercial_score": row.commercial_score, "confidence": row.confidence,
+        "matched_terms": row.matched_terms, "published_at": row.published_at,
+        "observed_at": row.observed_at, "commercially_verified": False
+    } for row in rows]
 
 @app.get("/owner/summary", dependencies=[Depends(require_owner)])
 def owner_summary(db: Session = Depends(get_db)):
