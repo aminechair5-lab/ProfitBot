@@ -66,6 +66,18 @@ def verified_supplier_offer(db: Session, product_id: int, market: str):
     ).order_by(desc(SupplierOffer.checked_at))).all()
     return next((offer for offer in rows if supplier_offer_is_usable(db, offer, market)), None)
 
+def supplier_offer_blockers(db: Session, product: Product) -> list[str]:
+    import re
+    markets = [code for code in re.findall(
+        r"(?<![A-Z0-9])[A-Z]{2}(?![A-Z0-9])", product.target_market.upper()
+    ) if code != "DZ"]
+    if not markets:
+        return ["حدد الأسواق المستهدفة برموز دول واضحة مثل US,GB,DE"]
+    missing = [market for market in markets if verified_supplier_offer(db, product.id, market) is None]
+    if missing:
+        return ["عرض المورد أو المخزون أو الشحن أو التكلفة غير موثق/قديم لهذه الأسواق: " + ", ".join(missing)]
+    return []
+
 
 def notify_customer(db: Session, order: CustomerOrder, event_type: str, subject: str, body: str):
     status = "disabled"
@@ -624,10 +636,11 @@ def list_products(db: Session = Depends(get_db)):
     result = []
     for p in db.scalars(select(Product).order_by(desc(Product.created_at))).all():
         score, eligible, net, margin = score_values(p)
+        reasons = eligibility_reasons(p, score, net, margin) + supplier_offer_blockers(db, p)
         result.append({
             "id": p.id, "name": p.name, "category": p.category, "target_market": p.target_market,
-            "supplier_name": p.supplier_name, "score": score, "eligible": eligible,
-            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+            "supplier_name": p.supplier_name, "score": score, "eligible": eligible and not reasons,
+            "eligibility_reasons": reasons,
             "estimated_net_profit": net, "estimated_margin_pct": margin, "status": p.status
         })
     return result
@@ -639,11 +652,12 @@ def create_product(data: ProductCreate, db: Session = Depends(get_db)):
     db.flush()
     score, eligible, net, margin = score_values(p)
     p.score = score
-    audit(db, "product_created", "product", p.id, f"eligible={eligible}; net={net}; margin={margin}")
+    reasons = eligibility_reasons(p, score, net, margin) + supplier_offer_blockers(db, p)
+    audit(db, "product_created", "product", p.id, f"eligible={eligible and not reasons}; net={net}; margin={margin}")
     db.commit()
     db.refresh(p)
-    return {"id": p.id, "score": score, "eligible": eligible,
-            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+    return {"id": p.id, "score": score, "eligible": eligible and not reasons,
+            "eligibility_reasons": reasons,
             "estimated_net_profit": net, "estimated_margin_pct": margin}
 
 @app.post("/products/{product_id}/score", dependencies=[Depends(require_owner)])
@@ -653,10 +667,11 @@ def rescore_product(product_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Product not found")
     score, eligible, net, margin = score_values(p)
     p.score = score
-    audit(db, "product_scored", "product", p.id, f"score={score}; eligible={eligible}")
+    reasons = eligibility_reasons(p, score, net, margin) + supplier_offer_blockers(db, p)
+    audit(db, "product_scored", "product", p.id, f"score={score}; eligible={eligible and not reasons}")
     db.commit()
-    return {"id": p.id, "score": score, "eligible": eligible,
-            "eligibility_reasons": eligibility_reasons(p, score, net, margin),
+    return {"id": p.id, "score": score, "eligible": eligible and not reasons,
+            "eligibility_reasons": reasons,
             "estimated_net_profit": net, "estimated_margin_pct": margin}
 
 
@@ -768,11 +783,7 @@ def publish_product(product_id: int, db: Session = Depends(get_db)):
     if not product:
         raise HTTPException(404, "Product not found")
     score, eligible, net, margin = score_values(product)
-    reasons = eligibility_reasons(product, score, net, margin)
-    import re
-    target_markets = [code for code in re.findall(r"(?<![A-Z0-9])[A-Z]{2}(?![A-Z0-9])", product.target_market.upper()) if code != "DZ"]
-    if not target_markets or any(verified_supplier_offer(db, product.id, code) is None for code in target_markets):
-        reasons.append("يلزم عرض مورد موثق وحديث ومتوفر ومناسب لكل سوق مستهدف قبل النشر")
+    reasons = eligibility_reasons(product, score, net, margin) + supplier_offer_blockers(db, product)
     if reasons:
         raise HTTPException(409, "لا يمكن نشر المنتج: " + "؛ ".join(reasons))
     product.status = "published"
