@@ -11,10 +11,10 @@ class ProductOpportunityDiscoveryTests(unittest.TestCase):
         return {
             "markets_requested": ["US", "GB", "DE", "CA"],
             "markets_scanned": [
-                {"geo": "US", "count": 2},
-                {"geo": "GB", "count": 1},
-                {"geo": "DE", "count": 1},
-                {"geo": "CA", "count": 0},
+                {"geo": "US", "count": 2, "scanned_count": 20},
+                {"geo": "GB", "count": 1, "scanned_count": 18},
+                {"geo": "DE", "count": 1, "scanned_count": 15},
+                {"geo": "CA", "count": 0, "scanned_count": 12},
             ],
             "failures": [],
             "items": [
@@ -48,6 +48,13 @@ class ProductOpportunityDiscoveryTests(unittest.TestCase):
         compare.return_value = self.comparison()
         result = discover_product_opportunities(db=None)
         self.assertEqual(result["market_scope"], "international_only")
+        self.assertEqual(result["cross_market_count"], 1)
+        self.assertEqual(result["scan_summary"]["markets_requested_count"], 4)
+        self.assertEqual(result["scan_summary"]["markets_succeeded_count"], 4)
+        self.assertEqual(result["scan_summary"]["markets_failed_count"], 0)
+        self.assertEqual(result["scan_summary"]["total_rss_items_scanned"], 65)
+        self.assertEqual(result["scan_summary"]["total_product_candidates"], 4)
+        self.assertEqual(result["scan_summary"]["zero_match_markets"], 1)
         self.assertEqual(result["items"][0]["title"], "Air fryer")
         self.assertEqual(result["items"][0]["market_breadth_score"], 75.0)
         self.assertEqual(result["items"][0]["discovery_priority_score"], 78.5)
