@@ -53,7 +53,7 @@ def supplier_offer_is_usable(db: Session, offer: SupplierOffer, market: str) -> 
         return False
     destinations = {part.strip().upper() for part in offer.destination_markets.replace(";", ",").split(",")}
     supplier = db.get(Supplier, offer.supplier_id)
-    return market in destinations and supplier is not None and supplier.verification_status == "verified"
+    return market in destinations and supplier is not None and supplier.country_code != "DZ" and supplier.verification_status == "verified"
 
 
 def verified_supplier_offer(db: Session, product_id: int, market: str):
