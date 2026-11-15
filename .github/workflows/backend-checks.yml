@@ -1,7 +1,7 @@
 name: backend-checks
 on:
   push:
-    branches: [main, feature/web-dashboard-v1]
+    branches: [main, feature/web-dashboard-v1, feature/global-market-foundation]
   pull_request:
     branches: [main]
 jobs:
