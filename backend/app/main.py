@@ -939,6 +939,24 @@ def create_paypal_checkout(data: PayPalCheckoutCreate, db: Session = Depends(get
             "approval_url": approve_url, "environment": __import__("os").getenv("PAYPAL_ENV", "sandbox")}
 
 
+@app.post("/payments/paypal/cancel")
+def cancel_paypal_checkout(data: PayPalCapture, db: Session = Depends(get_db)):
+    attempt = db.scalar(select(PaymentAttempt).where(
+        PaymentAttempt.order_ref == data.order_ref,
+        PaymentAttempt.provider_order_id == data.paypal_order_id,
+        PaymentAttempt.provider == "paypal"
+    ))
+    if not attempt:
+        raise HTTPException(404, "PayPal checkout attempt not found")
+    if attempt.status == "created":
+        attempt.status = "cancelled"
+        attempt.updated_at = datetime.now(timezone.utc)
+        audit(db, "paypal_checkout_cancelled", "order", data.order_ref, f"paypal_order_id={data.paypal_order_id}")
+        db.commit()
+    return {"order_ref": data.order_ref, "payment_attempt_status": attempt.status,
+            "payment_collected": False}
+
+
 @app.post("/payments/paypal/capture")
 def capture_paypal_checkout(data: PayPalCapture, db: Session = Depends(get_db)):
     attempt = db.scalar(select(PaymentAttempt).where(
