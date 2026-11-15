@@ -30,6 +30,20 @@ class ProductCreate(BaseModel):
             raise ValueError("name must contain at least two non-space characters")
         return value
 
+    @field_validator("target_market")
+    @classmethod
+    def target_market_must_exclude_algeria(cls, value: str) -> str:
+        value = value.strip()
+        normalized = value.casefold()
+        if normalized in {"dz", "algeria", "algeria (dz)", "الجزائر"}:
+            raise ValueError("The Algerian market is excluded from ProfitBot target markets")
+        if "الجزائر" in normalized or "algeria" in normalized:
+            raise ValueError("The Algerian market is excluded from ProfitBot target markets")
+        import re
+        if re.search(r"(?<![A-Z0-9])DZ(?![A-Z0-9])", value, re.IGNORECASE):
+            raise ValueError("The Algerian market is excluded from ProfitBot target markets")
+        return value
+
     @field_validator("source_url")
     @classmethod
     def source_url_must_be_http_url(cls, value: str | None) -> str | None:
