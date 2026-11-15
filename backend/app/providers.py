@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import base64
 import json
+import hashlib
+import hmac
+import smtplib
+from email.message import EmailMessage
 import os
 import urllib.error
 import urllib.request
@@ -200,3 +204,37 @@ def tracking_register(number: str, carrier: int | None = None) -> dict[str, Any]
     if result.get("code") != 0:
         raise ProviderRequestError("17TRACK registration failed")
     return result
+
+
+
+def tracking_verify_webhook(raw_body: bytes, signature: str | None) -> bool:
+    key = os.getenv("TRACK17_API_KEY", "")
+    if not key or not signature:
+        return False
+    expected = hashlib.sha256(raw_body + b"/" + key.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(expected, signature.strip().lower())
+
+
+def send_email_notification(*, recipient: str, subject: str, body: str) -> bool:
+    host = os.getenv("SMTP_HOST", "")
+    username = os.getenv("SMTP_USERNAME", "")
+    password = os.getenv("SMTP_PASSWORD", "")
+    sender = os.getenv("SMTP_FROM", "")
+    if not all((host, username, password, sender)):
+        raise ProviderNotConfigured("SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD and SMTP_FROM are required")
+    port = int(os.getenv("SMTP_PORT", "465"))
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+    if os.getenv("SMTP_USE_SSL", "true").strip().lower() == "true":
+        with smtplib.SMTP_SSL(host, port, timeout=20) as server:
+            server.login(username, password)
+            server.send_message(message)
+    else:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            server.starttls()
+            server.login(username, password)
+            server.send_message(message)
+    return True
