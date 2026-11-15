@@ -106,58 +106,119 @@ def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
     except (urllib.error.URLError, TimeoutError, ET.ParseError) as exc:
         raise HTTPException(502, f"Google Trends feed unavailable: {str(exc)[:180]}")
 
-    # Phrase-aware catalog: avoids the previous bug where multiword terms such as
-    # "air fryer" could never match a token-by-token comparison.
+    # Multilingual, phrase-aware catalog. Normalize accents/case while preserving
+    # non-Latin scripts so localized RSS titles can be classified too.
+    import unicodedata
     product_catalog = {
-        "Electronics": ["iphone", "smartphone", "mobile phone", "phone case", "phone charger",
-            "wireless charger", "power bank", "headphones", "earbuds", "bluetooth speaker",
-            "smartwatch", "laptop", "tablet", "keyboard", "computer mouse", "monitor",
-            "digital camera", "projector", "gaming console", "game controller"],
-        "Home & Kitchen": ["air fryer", "coffee maker", "espresso machine", "vacuum cleaner",
-            "robot vacuum", "water bottle", "storage organizer", "drawer organizer",
-            "desk lamp", "led lamp", "office chair", "mattress", "pillow", "cookware",
-            "kitchen gadget", "blender", "frying pan", "pressure cooker"],
-        "Beauty & Personal Care": ["skin care", "skincare", "face serum", "moisturizer",
-            "sunscreen", "makeup", "hair dryer", "hair straightener", "electric shaver",
-            "perfume", "beauty device"],
-        "Fashion & Accessories": ["sneakers", "running shoes", "boots", "backpack",
-            "handbag", "wallet", "sunglasses", "smart ring", "jacket", "dress", "jeans",
-            "wristwatch", "necklace", "bracelet"],
-        "Sports & Fitness": ["yoga mat", "resistance bands", "dumbbells", "treadmill",
-            "fitness tracker", "waterproof bag", "camping tent", "hiking shoes"],
-        "Pet Supplies": ["pet carrier", "cat litter", "dog harness", "pet toy", "pet bed"],
-        "Toys & Gaming": ["lego set", "board game", "action figure", "toy", "gaming headset"]
+        "Electronics": [
+            "iphone", "smartphone", "mobile phone", "phone case", "phone charger", "wireless charger",
+            "power bank", "headphones", "earbuds", "bluetooth speaker", "smartwatch", "laptop",
+            "tablet", "keyboard", "computer mouse", "monitor", "digital camera", "projector",
+            "gaming console", "game controller", "smartphone", "handy", "mobiltelefon", "kopfhörer",
+            "écouteurs", "casque audio", "téléphone portable", "coque de téléphone", "chargeur sans fil",
+            "auriculares", "teléfono móvil", "funda de móvil", "cargador inalámbrico", "portátil",
+            "cuffie", "auricolari", "telefono cellulare", "custodia telefono", "draadloze koptelefoon",
+            "koptelefoon", "hörlurar", "mobilskal", "スマートフォン", "ワイヤレスイヤホン", "モバイルバッテリー"
+        ],
+        "Home & Kitchen": [
+            "air fryer", "coffee maker", "espresso machine", "vacuum cleaner", "robot vacuum",
+            "water bottle", "storage organizer", "drawer organizer", "desk lamp", "led lamp",
+            "office chair", "mattress", "pillow", "cookware", "kitchen gadget", "blender",
+            "frying pan", "pressure cooker", "heißluftfritteuse", "kaffeemaschine", "staubsauger",
+            "küchenmaschine", "friteuse sans huile", "machine à café", "aspirateur robot",
+            "gourde", "organisateur de rangement", "lampe de bureau", "silla de oficina",
+            "freidora de aire", "cafetera", "aspiradora", "botella reutilizable", "organizador",
+            "friggitrice ad aria", "macchina da caffè", "aspirapolvere", "borraccia",
+            "airfryer", "koffiezetapparaat", "stofzuiger", "vattenflaska", "luftrenare",
+            "エアフライヤー", "コーヒーメーカー", "ロボット掃除機", "水筒", "収納ボックス"
+        ],
+        "Beauty & Personal Care": [
+            "skin care", "skincare", "face serum", "moisturizer", "sunscreen", "makeup",
+            "hair dryer", "hair straightener", "electric shaver", "perfume", "beauty device",
+            "gesichtspflege", "sonnencreme", "haartrockner", "hautpflege", "sérum visage",
+            "crème hydratante", "crème solaire", "soin de la peau", "sèche-cheveux",
+            "suero facial", "crema hidratante", "protector solar", "cuidado de la piel",
+            "secador de pelo", "siero viso", "crema solare", "cura della pelle",
+            "gezichtsverzorging", "zonnebrandcrème", "huidverzorging", "hårfön",
+            "美容液", "日焼け止め", "スキンケア", "ヘアドライヤー"
+        ],
+        "Fashion & Accessories": [
+            "sneakers", "running shoes", "boots", "backpack", "handbag", "wallet", "sunglasses",
+            "smart ring", "jacket", "dress", "jeans", "wristwatch", "necklace", "bracelet",
+            "turnschuhe", "rucksack", "sonnenbrille", "handtasche", "mantel", "baskets",
+            "chaussures de running", "sac à dos", "lunettes de soleil", "sac à main",
+            "zapatillas", "mochila", "gafas de sol", "bolso", "chaqueta",
+            "scarpe da ginnastica", "zaino", "occhiali da sole", "borsa",
+            "rugzak", "zonnebril", "sneakers", "スニーカー", "リュック", "サングラス"
+        ],
+        "Sports & Fitness": [
+            "yoga mat", "resistance bands", "dumbbells", "treadmill", "fitness tracker",
+            "waterproof bag", "camping tent", "hiking shoes", "yogamatte", "hanteln",
+            "tapis de yoga", "bandes de résistance", "haltères", "tapis de course",
+            "esterilla de yoga", "bandas de resistencia", "mancuernas", "cinta de correr",
+            "tappetino yoga", "fasce elastiche", "manubri", "yogamat", "motståndsband",
+            "ヨガマット", "ダンベル", "ランニングマシン"
+        ],
+        "Pet Supplies": [
+            "pet carrier", "cat litter", "dog harness", "pet toy", "pet bed",
+            "hundegeschirr", "katzenstreu", "transportbox für hunde", "litière pour chat",
+            "harnais pour chien", "jouet pour animaux", "arena para gatos", "arnés para perro",
+            "juguete para mascotas", "lettiera per gatti", "guinzaglio per cani",
+            "kattenbakvulling", "hondenharnas", "猫砂", "犬用ハーネス", "ペットベッド"
+        ],
+        "Toys & Gaming": [
+            "lego set", "board game", "action figure", "toy", "gaming headset",
+            "gesellschaftsspiel", "brettspiel", "spielzeug", "jeu de société", "figurine",
+            "juego de mesa", "figura de acción", "juguete", "gioco da tavolo", "giocattolo",
+            "bordspel", "speelgoed", "brädspel", "leksak", "ボードゲーム", "おもちゃ"
+        ]
     }
-    shopping_intent = ["buy", "best", "review", "price", "deal", "discount", "sale",
-        "where to buy", "versus", "vs"]
-    non_commercial = ["breaking news", "election", "president", "prime minister",
-        "football", "soccer", "basketball", "tennis", "cricket", "match result",
-        "live score", "weather", "earthquake", "war", "death", "obituary",
-        "celebrity", "actor", "actress", "singer", "concert", "movie", "film",
-        "tv series", "episode", "championship", "tournament"]
+    shopping_intent = [
+        "buy", "best", "review", "price", "deal", "discount", "sale", "where to buy", "versus", "vs",
+        "kaufen", "preis", "angebot", "test", "avis", "acheter", "prix", "promo", "meilleur",
+        "comprar", "precio", "oferta", "mejor", "recensione", "prezzo", "offerta",
+        "kopen", "prijs", "aanbieding", "köpa", "pris", "bäst", "購入", "価格", "おすすめ"
+    ]
+    non_commercial = [
+        "breaking news", "election", "president", "prime minister", "football", "soccer",
+        "basketball", "tennis", "cricket", "match result", "live score", "weather", "earthquake",
+        "war", "death", "obituary", "celebrity", "actor", "actress", "singer", "concert",
+        "movie", "film", "tv series", "episode", "championship", "tournament",
+        "nachrichten", "wahl", "wetter", "erdbeben", "krieg", "élections", "météo",
+        "tremblement de terre", "guerre", "noticias", "elecciones", "tiempo", "terremoto",
+        "guerra", "elezioni", "meteo", "notizie", "nieuws", "verkiezingen", "väder",
+        "ニュース", "選挙", "天気", "地震", "戦争"
+    ]
+
+    def normalize_title(value: str):
+        value = unicodedata.normalize("NFKC", value).casefold()
+        value = "".join(char for char in unicodedata.normalize("NFKD", value)
+                        if not unicodedata.combining(char))
+        return re.sub(r"[^\w]+", " ", value, flags=re.UNICODE).strip()
+
+    def has_phrase(normalized: str, term: str):
+        phrase = normalize_title(term)
+        return bool(phrase and re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", normalized, flags=re.UNICODE))
 
     def classify(title: str):
-        normalized = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+        normalized = normalize_title(title)
         matched = []
         categories = []
         for category, terms in product_catalog.items():
-            category_hits = [term for term in terms
-                if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
+            category_hits = [term for term in terms if has_phrase(normalized, term)]
             if category_hits:
                 categories.append(category)
                 matched.extend(category_hits)
-        blocked = [term for term in non_commercial
-            if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
+        blocked = [term for term in non_commercial if has_phrase(normalized, term)]
         if not matched or blocked:
             return None
-        intent_hits = [term for term in shopping_intent
-            if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)]
+        intent_hits = [term for term in shopping_intent if has_phrase(normalized, term)]
         score = min(95, 58 + min(18, (len(matched) - 1) * 9) + min(15, len(intent_hits) * 5))
-        reasons = ["تطابق مع كلمات منتج معروفة"]
+        reasons = ["تطابق مع قاموس منتجات متعدد اللغات"]
         if len(matched) > 1:
             reasons.append("أكثر من مصطلح منتج")
         if intent_hits:
-            reasons.append("وجود نية شراء أو مقارنة")
+            reasons.append("وجود عبارة شراء أو مقارنة محلية")
         confidence = "medium" if score >= 70 else "low"
         return {
             "category": categories[0],
@@ -171,6 +232,7 @@ def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
     candidates = []
     scanned_count = 0
     rejected_count = 0
+    unclassified_items = []
     for item in root.findall(".//item")[:60]:
         scanned_count += 1
         fields = {child.tag.split("}")[-1]: (child.text or "").strip() for child in item}
@@ -178,6 +240,8 @@ def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
         classification = classify(title)
         if not classification:
             rejected_count += 1
+            if title and len(unclassified_items) < 10:
+                unclassified_items.append({"title": title, "url": fields.get("link", "")})
             continue
         published = fields.get("pubDate")
         try:
@@ -220,7 +284,9 @@ def google_trend_signals(geo: str = "US", db: Session = Depends(get_db)):
         "scanned_count": scanned_count,
         "count": len(candidates[:20]),
         "excluded_count": rejected_count,
-        "filter": "Phrase-aware product catalog plus shopping-intent and non-commercial topic checks.",
+        "unclassified_count": rejected_count,
+        "unclassified_items": unclassified_items,
+        "filter": "Multilingual phrase-aware product catalog plus localized shopping-intent and non-commercial topic checks.",
         "score_interpretation": "Heuristic keyword relevance only; not search volume, demand, conversion, sales or profit.",
         "warning": "النتائج إشارات بحث أولية فقط وليست دليلاً على المبيعات أو الربح. درجة التطابق لا تقيس حجم الطلب. يلزم التحقق من المورد والسعر والشحن والرسوم والمنافسة والضرائب.",
         "items": candidates[:20]
@@ -278,7 +344,9 @@ def compare_trend_markets(markets: str = "US,GB,DE,CA", db: Session = Depends(ge
     for country in requested:
         try:
             result = google_trend_signals(geo=country, db=db)
-            results.append({"geo": country, "count": result["count"], "scanned_count": result["scanned_count"]})
+            results.append({"geo": country, "count": result["count"], "scanned_count": result["scanned_count"],
+                "unclassified_count": result.get("unclassified_count", 0),
+                "unclassified_items": result.get("unclassified_items", [])})
             for item in result["items"]:
                 key = re.sub(r"[^a-z0-9]+", " ", item["title"].casefold()).strip()
                 if not key:
@@ -364,6 +432,9 @@ def discover_product_opportunities(
         "markets_scanned": markets_scanned,
         "successful_market_count": len(markets_scanned),
         "failed_market_count": len(failures),
+        "unclassified_count_total": sum(int(market.get("unclassified_count", 0) or 0) for market in markets_scanned),
+        "unclassified_samples": [{"geo": market["geo"], **sample}
+            for market in markets_scanned for sample in market.get("unclassified_items", [])][:20],
         "rss_items_scanned_total": sum(int(market.get("scanned_count", 0) or 0) for market in markets_scanned),
         "matched_candidates_total": sum(int(market.get("count", 0) or 0) for market in markets_scanned),
         "cross_market_count": comparison["cross_market_count"],
