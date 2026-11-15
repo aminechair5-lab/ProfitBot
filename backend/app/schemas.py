@@ -155,3 +155,43 @@ class SupplierOfferCreate(BaseModel):
         if value is not None and minimum is not None and value < minimum:
             raise ValueError("shipping_days_max cannot be lower than shipping_days_min")
         return value
+
+
+class StoreOrderCreate(BaseModel):
+    product_id: int = Field(gt=0)
+    quantity: int = Field(default=1, ge=1, le=10)
+    customer_name: str = Field(min_length=2, max_length=180)
+    customer_email: str = Field(min_length=6, max_length=254)
+    destination_country: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
+    shipping_address: str = Field(min_length=8, max_length=1000)
+
+    @field_validator("customer_name")
+    @classmethod
+    def customer_name_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Customer name is required")
+        return value
+
+    @field_validator("customer_email")
+    @classmethod
+    def customer_email_basic_check(cls, value: str) -> str:
+        import re
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", value):
+            raise ValueError("A valid customer email is required")
+        return value
+
+    @field_validator("destination_country")
+    @classmethod
+    def destination_must_be_supported(cls, value: str) -> str:
+        value = value.upper()
+        if value == "DZ":
+            raise ValueError("This store does not accept orders for this destination")
+        return value
+
+
+class OrderStatusUpdate(BaseModel):
+    status: Literal["payment_confirmed", "supplier_ordered", "shipped", "delivered", "cancelled"]
+    payment_reference: str | None = Field(default=None, max_length=180)
+    tracking_number: str | None = Field(default=None, max_length=180)
