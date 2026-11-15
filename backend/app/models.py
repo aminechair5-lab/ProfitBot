@@ -50,3 +50,38 @@ class AuditEvent(Base):
     entity_id: Mapped[str] = mapped_column(String(80))
     detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(180), index=True)
+    website_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    contact_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    verification_status: Mapped[str] = mapped_column(String(30), default="unverified")
+    reliability_score: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class SupplierOffer(Base):
+    __tablename__ = "supplier_offers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True, index=True)
+    product_title: Mapped[str] = mapped_column(String(220), index=True)
+    source_url: Mapped[str] = mapped_column(String(1000))
+    supplier_sku: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    unit_price: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    shipping_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shipping_currency: Mapped[str] = mapped_column(String(3), default="USD")
+    destination_markets: Mapped[str] = mapped_column(String(500), default="")
+    shipping_days_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shipping_days_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stock_status: Mapped[str] = mapped_column(String(30), default="unknown")
+    data_source: Mapped[str] = mapped_column(String(80), default="manual")
+    verification_status: Mapped[str] = mapped_column(String(30), default="unverified")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
