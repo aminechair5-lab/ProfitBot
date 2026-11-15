@@ -11,6 +11,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import urllib.parse
 from typing import Any
 
 
@@ -60,12 +61,19 @@ def _paypal_token() -> str:
     if not client_id or not secret:
         raise ProviderNotConfigured("PayPal credentials are not configured")
     credentials = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
-    result = _json_request(
+    body = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode("ascii")
+    request = urllib.request.Request(
         _paypal_base() + "/v1/oauth2/token",
+        data=body,
         headers={"Authorization": "Basic " + credentials,
                  "Content-Type": "application/x-www-form-urlencoded"},
-        payload=None,
+        method="POST",
     )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read(1_000_000).decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, urllib.error.HTTPError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProviderRequestError("PayPal authentication failed") from exc
     token = result.get("access_token")
     if not token:
         raise ProviderRequestError("PayPal did not return an access token")
