@@ -355,12 +355,19 @@ def discover_product_opportunities(
     for index, item in enumerate(ranked[:limit], start=1):
         item["rank"] = index
 
+    markets_scanned = comparison["markets_scanned"]
+    failures = comparison["failures"]
     return {
         "source": "Google Trends Trending RSS",
         "market_scope": "international_only",
         "markets_requested": comparison["markets_requested"],
-        "markets_scanned": comparison["markets_scanned"],
-        "failures": comparison["failures"],
+        "markets_scanned": markets_scanned,
+        "successful_market_count": len(markets_scanned),
+        "failed_market_count": len(failures),
+        "rss_items_scanned_total": sum(int(market.get("scanned_count", 0) or 0) for market in markets_scanned),
+        "matched_candidates_total": sum(int(market.get("count", 0) or 0) for market in markets_scanned),
+        "cross_market_count": comparison["cross_market_count"],
+        "failures": failures,
         "min_markets": min_markets,
         "count": min(len(ranked), limit),
         "total_candidates_after_filter": len(ranked),
