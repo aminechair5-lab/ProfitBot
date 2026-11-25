@@ -18,7 +18,7 @@ jobs:
     steps:
       - name: Check public health endpoint with retries
         env:
-          BASE_URL: https://profitbot-484w.onrender.com
+          BASE_URL: https://profitbot-484v.onrender.com
         shell: bash
         run: |
           status="000"
@@ -49,7 +49,7 @@ jobs:
           PY
       - name: Check public dashboard route
         env:
-          BASE_URL: https://profitbot-484w.onrender.com
+          BASE_URL: https://profitbot-484v.onrender.com
         run: |
           curl --fail --silent --show-error --max-time 30 "$BASE_URL/" -o dashboard.html
           grep -q "ProfitBot" dashboard.html
