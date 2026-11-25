@@ -1,10 +1,37 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 from app.main import score_values
 from app.db import normalize_database_url
 from app.schemas import ProductCreate, ApprovalCreate, ApprovalDecision
+from app.security import require_owner
+
+
+class OwnerAuthenticationTests(unittest.TestCase):
+    def test_bearer_header_accepts_case_and_surrounding_whitespace(self):
+        with patch("app.security.settings", SimpleNamespace(owner_api_token="expected-secret")):
+            self.assertTrue(require_owner("  bEaReR   expected-secret  "))
+
+    def test_bearer_header_rejects_wrong_token(self):
+        with patch("app.security.settings", SimpleNamespace(owner_api_token="expected-secret")):
+            with self.assertRaises(HTTPException) as raised:
+                require_owner("Bearer wrong-secret")
+            self.assertEqual(raised.exception.status_code, 401)
+
+    def test_bearer_header_rejects_missing_scheme(self):
+        with patch("app.security.settings", SimpleNamespace(owner_api_token="expected-secret")):
+            with self.assertRaises(HTTPException) as raised:
+                require_owner("expected-secret")
+            self.assertEqual(raised.exception.status_code, 401)
+
+    def test_missing_server_owner_token_fails_closed(self):
+        with patch("app.security.settings", SimpleNamespace(owner_api_token="")):
+            with self.assertRaises(HTTPException) as raised:
+                require_owner("Bearer any-value")
+            self.assertEqual(raised.exception.status_code, 503)
 
 
 class ProductScoringTests(unittest.TestCase):
