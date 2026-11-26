@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, func, text
+from sqlalchemy import select, desc, func, text, inspect
 from .config import settings
 from .db import Base, engine, get_db
 from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal, PaymentAttempt, SupplierFulfillment, ShipmentTracking, NotificationLog
@@ -15,6 +15,10 @@ from .product_sources import discover_product_articles, MARKET_LOCALES, normaliz
 from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_access_token, cj_available_logistics, cj_search_products, cj_product_detail, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
 
 Base.metadata.create_all(bind=engine)
+# Add the optional product image field to databases created before image support.
+if "image_url" not in {column["name"] for column in inspect(engine).get_columns("products")}:
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE products ADD COLUMN image_url VARCHAR(1000)"))
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
 
 app.add_middleware(
@@ -864,7 +868,7 @@ def public_store_products(db: Session = Depends(get_db)):
     rows = db.scalars(select(Product).where(Product.status == "published").order_by(desc(Product.created_at)).limit(100)).all()
     return [{
         "id": p.id, "name": p.name, "category": p.category, "target_market": p.target_market,
-        "price": p.selling_price, "currency": "USD", "description": "منتج معروض من متجر ProfitBot. يتم تأكيد التوفر والشحن يدوياً قبل تحصيل أي مبلغ."
+        "price": p.selling_price, "currency": "USD", "image_url": p.image_url, "description": "منتج معروض من متجر ProfitBot. يتم تأكيد التوفر والشحن يدوياً قبل تحصيل أي مبلغ."
     } for p in rows]
 
 
