@@ -265,6 +265,29 @@ class FulfillmentPrepare(BaseModel):
 
 
 
+
+class CJLogisticsQuery(BaseModel):
+    sku: str = Field(min_length=1, max_length=120)
+    start_country_code: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
+    dest_country_code: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
+
+    @field_validator("sku")
+    @classmethod
+    def cj_sku_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("CJ SKU is required")
+        return value
+
+    @field_validator("start_country_code", "dest_country_code")
+    @classmethod
+    def logistics_countries_must_be_supported(cls, value: str) -> str:
+        value = value.upper()
+        if value == "DZ":
+            raise ValueError("Algeria is excluded from ProfitBot supplier and shipping operations")
+        return value
+
+
 class CJOrderCreate(BaseModel):
     shipping_country_name: str = Field(min_length=2, max_length=50)
     shipping_province: str = Field(min_length=2, max_length=50)

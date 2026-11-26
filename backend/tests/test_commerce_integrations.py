@@ -72,6 +72,16 @@ class ProviderSafetyTests(unittest.TestCase):
         self.assertEqual(payload["isSandbox"], 1)
         self.assertEqual(result["data"]["orderId"], "CJ-1")
 
+    def test_cj_available_logistics_uses_current_exact_route(self):
+        with patch.dict(os.environ, {"CJ_API_KEY": "test-key"}, clear=True), \
+             patch.object(providers, "cj_access_token", return_value="access-token"), \
+             patch.object(providers, "_json_request", return_value={"code": 200, "result": True, "data": [{"logisticsName": "CJPacket Ordinary"}]}) as request:
+            methods = providers.cj_available_logistics("CJ-SKU-1", "cn", "us")
+        self.assertEqual(methods, ["CJPacket Ordinary"])
+        self.assertEqual(request.call_args.kwargs["payload"], {
+            "sku": "CJ-SKU-1", "startCountryCode": "CN", "destCountryCode": "US"
+        })
+
     def test_cj_live_creation_needs_both_server_flag_and_per_order_confirmation(self):
         with patch.dict(os.environ, {"CJ_API_KEY": "test-key", "CJ_LIVE_ORDER_CREATION": "true"}, clear=True), \
              patch.object(providers, "cj_access_token", return_value="access-token"), \

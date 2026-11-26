@@ -9,10 +9,10 @@ from sqlalchemy import select, desc, func, text
 from .config import settings
 from .db import Base, engine, get_db
 from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, CustomerOrder, TrendSignal, PaymentAttempt, SupplierFulfillment, ShipmentTracking, NotificationLog
-from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate, SupplierPaymentConfirmation
+from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate, CJLogisticsQuery, SupplierPaymentConfirmation
 from .security import require_owner
 from .product_sources import discover_product_articles, MARKET_LOCALES, normalize
-from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_access_token, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
+from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_access_token, cj_available_logistics, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProfitBot Cloud API", version="0.5.0")
@@ -988,6 +988,31 @@ def test_cj_connection():
     }
 
 
+ 
+@app.post("/integrations/cj/logistics", dependencies=[Depends(require_owner)])
+def cj_shipping_methods(data: CJLogisticsQuery):
+    """Fetch CJ's current, route-specific methods; this endpoint never creates an order."""
+    if not cj_configured():
+        raise HTTPException(503, "CJ_API_KEY is not configured on the server")
+    try:
+        methods = cj_available_logistics(
+            data.sku, data.start_country_code, data.dest_country_code
+        )
+    except ProviderNotConfigured:
+        raise HTTPException(503, "CJ_API_KEY is not configured on the server")
+    except ProviderRequestError:
+        raise HTTPException(502, "CJ shipping method lookup failed. Check the SKU, route, and CJ API response.")
+    return {
+        "provider": "cj_dropshipping",
+        "sku": data.sku,
+        "start_country_code": data.start_country_code,
+        "dest_country_code": data.dest_country_code,
+        "logistics": methods,
+        "order_created": False,
+        "payment_made": False,
+    }
+
+
 @app.get("/payments/paypal/availability")
 def paypal_checkout_availability():
     import os
@@ -1208,6 +1233,16 @@ def create_cj_supplier_order(order_id: int, data: CJOrderCreate, db: Session = D
         "products": [{"sku": offer.supplier_sku, "quantity": order.quantity,
                       "storeLineItemId": order.order_ref}],
     }
+    try:
+        allowed_logistics = cj_available_logistics(
+            offer.supplier_sku, data.from_country_code, order.destination_country
+        )
+    except ProviderNotConfigured:
+        raise HTTPException(503, "CJ_API_KEY is not configured on the server")
+    except ProviderRequestError:
+        raise HTTPException(502, "CJ could not verify current shipping methods for this SKU and route")
+    if data.logistic_name not in allowed_logistics:
+        raise HTTPException(409, "Choose a current CJ shipping method for this SKU, origin, and destination")
     try:
         result = cj_create_order_only(payload, allow_live=data.confirm_live_creation)
     except (ProviderNotConfigured, ProviderRequestError) as exc:
