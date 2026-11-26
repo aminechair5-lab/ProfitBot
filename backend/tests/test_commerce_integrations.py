@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.schemas import (
     SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate,
-    CJOrderCreate, TrackingRegistration,
+    CJOrderCreate, TrackingRegistration, CJLogisticsQuery,
 )
 from app import providers
 
@@ -24,6 +24,16 @@ class CommerceSchemaTests(unittest.TestCase):
     def test_paypal_return_urls_must_be_https(self):
         with self.assertRaises(ValidationError):
             PayPalCheckoutCreate(order_ref="PB-123456", return_url="http://example.com/return", cancel_url="https://example.com/cancel")
+
+    def test_cj_logistics_normalizes_route_codes(self):
+        data = CJLogisticsQuery(sku=" CJ-SKU-1 ", start_country_code="cn", dest_country_code="us")
+        self.assertEqual(data.sku, "CJ-SKU-1")
+        self.assertEqual(data.start_country_code, "CN")
+        self.assertEqual(data.dest_country_code, "US")
+
+    def test_cj_logistics_rejects_algeria(self):
+        with self.assertRaises(ValidationError):
+            CJLogisticsQuery(sku="CJ-SKU-1", start_country_code="CN", dest_country_code="DZ")
 
     def test_cj_order_defaults_are_safe(self):
         data = CJOrderCreate(
