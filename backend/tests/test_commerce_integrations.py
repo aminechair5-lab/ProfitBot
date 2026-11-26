@@ -82,6 +82,23 @@ class ProviderSafetyTests(unittest.TestCase):
         self.assertEqual(payload["isSandbox"], 1)
         self.assertEqual(result["data"]["orderId"], "CJ-1")
 
+    def test_cj_product_detail_uses_product_id(self):
+        with patch.dict(os.environ, {"CJ_API_KEY": "test-key"}, clear=True), \
+             patch.object(providers, "cj_access_token", return_value="access-token"), \
+             patch.object(providers, "_json_request", return_value={"code": 200, "result": True, "data": {"stanProducts": []}}) as request:
+            data = providers.cj_product_detail("product-1")
+        self.assertEqual(data["stanProducts"], [])
+        self.assertEqual(request.call_args.kwargs["payload"], {"id": "product-1"})
+
+    def test_cj_search_uses_documented_keyword_and_country_params(self):
+        with patch.dict(os.environ, {"CJ_API_KEY": "test-key"}, clear=True), \
+             patch.object(providers, "cj_access_token", return_value="access-token"), \
+             patch.object(providers, "_json_request", return_value={"code": 200, "result": True, "data": {"content": []}}) as request:
+            providers.cj_search_products("wireless charger", "us", 2, 5)
+        self.assertIn("keyWord=wireless+charger", request.call_args.args[0])
+        self.assertIn("countryCode=US", request.call_args.args[0])
+        self.assertEqual(request.call_args.kwargs["method"], "GET")
+
     def test_cj_available_logistics_uses_current_exact_route(self):
         with patch.dict(os.environ, {"CJ_API_KEY": "test-key"}, clear=True), \
              patch.object(providers, "cj_access_token", return_value="access-token"), \
