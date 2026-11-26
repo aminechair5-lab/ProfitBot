@@ -13,6 +13,7 @@ class Product(Base):
     category: Mapped[str] = mapped_column(String(100), default="Uncategorized")
     target_market: Mapped[str] = mapped_column(String(100), default="Global - validate per country")
     source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     supplier_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
     supplier_cost: Mapped[float] = mapped_column(Float, default=0)
     shipping_cost: Mapped[float] = mapped_column(Float, default=0)
