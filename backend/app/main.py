@@ -12,7 +12,7 @@ from .models import Product, Approval, AuditEvent, Supplier, SupplierOffer, Cust
 from .schemas import ProductCreate, ApprovalCreate, ApprovalDecision, SupplierCreate, SupplierOfferCreate, StoreOrderCreate, OrderStatusUpdate, SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate, PayPalCapture, TrackingRegistration, FulfillmentPrepare, CJOrderCreate, CJLogisticsQuery, SupplierPaymentConfirmation
 from .security import require_owner
 from .product_sources import discover_product_articles, MARKET_LOCALES, normalize
-from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_access_token, cj_available_logistics, cj_search_products, cj_product_detail, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
+from .providers import (ProviderNotConfigured, ProviderRequestError, paypal_configured, paypal_create_order, paypal_capture_order, paypal_verify_webhook, cj_configured, cj_access_token, cj_available_logistics, cj_freight_calculate, cj_search_products, cj_product_detail, cj_create_order_only, tracking_configured, tracking_register, tracking_verify_webhook, send_email_notification)
 
 Base.metadata.create_all(bind=engine)
 # Add the optional product image field to databases created before image support.
@@ -1055,6 +1055,34 @@ def cj_shipping_methods(data: CJLogisticsQuery):
         "order_created": False,
         "payment_made": False,
     }
+
+
+@app.post("/integrations/cj/freight", dependencies=[Depends(require_owner)])
+def cj_shipping_quote(vid: str, start_country_code: str, dest_country_code: str, quantity: int = 1):
+    """Return a current CJ freight estimate; this never creates or pays an order."""
+    import re
+    vid = vid.strip()
+    start_country_code, dest_country_code = start_country_code.strip().upper(), dest_country_code.strip().upper()
+    if not vid or len(vid) > 200:
+        raise HTTPException(400, "A valid CJ variant ID is required")
+    if not re.fullmatch(r"[A-Z]{2}", start_country_code) or start_country_code == "DZ":
+        raise HTTPException(400, "Use a valid two-letter shipping-from country code")
+    if not re.fullmatch(r"[A-Z]{2}", dest_country_code) or dest_country_code == "DZ":
+        raise HTTPException(400, "Use a valid two-letter destination country code")
+    if quantity < 1 or quantity > 10:
+        raise HTTPException(400, "Quantity must be between 1 and 10")
+    if not cj_configured():
+        raise HTTPException(503, "CJ_API_KEY is not configured on the server")
+    try:
+        quotes = cj_freight_calculate(vid, start_country_code, dest_country_code, quantity)
+    except ProviderNotConfigured:
+        raise HTTPException(503, "CJ_API_KEY is not configured on the server")
+    except ProviderRequestError:
+        raise HTTPException(502, "CJ freight quote failed. Check the selected CJ variant, route, and CJ API response.")
+    return {"provider": "cj_dropshipping", "variant_id": vid,
+            "start_country_code": start_country_code, "dest_country_code": dest_country_code,
+            "quantity": quantity, "quotes": quotes, "quoted_at": datetime.now(timezone.utc).isoformat(),
+            "order_created": False, "payment_made": False}
 
 
 @app.get("/payments/paypal/availability")
