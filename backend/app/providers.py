@@ -186,6 +186,58 @@ def cj_create_order_only(payload: dict[str, Any], *, allow_live: bool = False) -
     return result
 
 
+
+
+def cj_search_products(keyword: str, country_code: str = "US", page: int = 1, size: int = 20) -> dict[str, Any]:
+    token = cj_access_token()
+    query = urllib.parse.urlencode({"keyWord": keyword.strip(), "countryCode": country_code.upper(), "page": page, "size": size})
+    result = _json_request(
+        "https://developers.cjdropshipping.com/api2.0/v1/product/listV2?" + query,
+        method="GET", headers={"CJ-Access-Token": token},
+    )
+    if result.get("code") not in (0, 200) or result.get("result") is False or result.get("success") is False:
+        raise ProviderRequestError("CJ product search failed: " + str(result.get("message", "unknown error"))[:180])
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise ProviderRequestError("CJ returned an unexpected product search response")
+    return data
+
+
+def cj_product_detail(product_id: str) -> dict[str, Any]:
+    token = cj_access_token()
+    result = _json_request(
+        "https://developers.cjdropshipping.com/api2.0/v1/product/productDetail/query",
+        headers={"CJ-Access-Token": token, "Content-Type": "application/json"},
+        payload={"id": product_id.strip()},
+    )
+    if result.get("code") not in (0, 200) or result.get("result") is False or result.get("success") is False:
+        raise ProviderRequestError("CJ product detail lookup failed: " + str(result.get("message", "unknown error"))[:180])
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise ProviderRequestError("CJ returned an unexpected product detail response")
+    return data
+
+
+def cj_available_logistics(sku: str, start_country_code: str, dest_country_code: str) -> list[str]:
+    """Return CJ's current shipping methods for an exact SKU and route."""
+    token = cj_access_token()
+    result = _json_request(
+        "https://developers.cjdropshipping.com/api2.0/v1/logistic/getAvailableLogistics",
+        headers={"CJ-Access-Token": token, "Content-Type": "application/json"},
+        payload={
+            "sku": sku.strip(),
+            "startCountryCode": start_country_code.strip().upper(),
+            "destCountryCode": dest_country_code.strip().upper(),
+        },
+    )
+    if result.get("code") not in (0, 200) or result.get("result") is False or result.get("success") is False:
+        raise ProviderRequestError("CJ shipping methods lookup failed: " + str(result.get("message", "unknown error"))[:180])
+    data = result.get("data")
+    if not isinstance(data, list):
+        raise ProviderRequestError("CJ returned an unexpected shipping methods response")
+    return [name for row in data if isinstance(row, dict)
+            if isinstance((name := row.get("logisticsName")), str) and name.strip()]
+
 def tracking_configured() -> bool:
     return bool(os.getenv("TRACK17_API_KEY"))
 

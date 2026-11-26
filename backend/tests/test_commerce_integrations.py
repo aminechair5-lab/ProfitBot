@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.schemas import (
     SupplierVerification, SupplierOfferVerification, PayPalCheckoutCreate,
-    CJOrderCreate, TrackingRegistration,
+    CJOrderCreate, TrackingRegistration, CJLogisticsQuery,
 )
 from app import providers
 
@@ -24,6 +24,16 @@ class CommerceSchemaTests(unittest.TestCase):
     def test_paypal_return_urls_must_be_https(self):
         with self.assertRaises(ValidationError):
             PayPalCheckoutCreate(order_ref="PB-123456", return_url="http://example.com/return", cancel_url="https://example.com/cancel")
+
+    def test_cj_logistics_normalizes_route_codes(self):
+        data = CJLogisticsQuery(sku=" CJ-SKU-1 ", start_country_code="cn", dest_country_code="us")
+        self.assertEqual(data.sku, "CJ-SKU-1")
+        self.assertEqual(data.start_country_code, "CN")
+        self.assertEqual(data.dest_country_code, "US")
+
+    def test_cj_logistics_rejects_algeria(self):
+        with self.assertRaises(ValidationError):
+            CJLogisticsQuery(sku="CJ-SKU-1", start_country_code="CN", dest_country_code="DZ")
 
     def test_cj_order_defaults_are_safe(self):
         data = CJOrderCreate(
@@ -71,6 +81,33 @@ class ProviderSafetyTests(unittest.TestCase):
         self.assertEqual(payload["payType"], 3)
         self.assertEqual(payload["isSandbox"], 1)
         self.assertEqual(result["data"]["orderId"], "CJ-1")
+
+    def test_cj_product_detail_uses_product_id(self):
+        with patch.dict(os.environ, {"CJ_API_KEY": "test-key"}, clear=True), \
+             patch.object(providers, "cj_access_token", return_value="access-token"), \
+             patch.object(providers, "_json_request", return_value={"code": 200, "result": True, "data": {"stanProducts": []}}) as request:
+            data = providers.cj_product_detail("product-1")
+        self.assertEqual(data["stanProducts"], [])
+        self.assertEqual(request.call_args.kwargs["payload"], {"id": "product-1"})
+
+    def test_cj_search_uses_documented_keyword_and_country_params(self):
+        with patch.dict(os.environ, {"CJ_API_KEY": "test-key"}, clear=True), \
+             patch.object(providers, "cj_access_token", return_value="access-token"), \
+             patch.object(providers, "_json_request", return_value={"code": 200, "result": True, "data": {"content": []}}) as request:
+            providers.cj_search_products("wireless charger", "us", 2, 5)
+        self.assertIn("keyWord=wireless+charger", request.call_args.args[0])
+        self.assertIn("countryCode=US", request.call_args.args[0])
+        self.assertEqual(request.call_args.kwargs["method"], "GET")
+
+    def test_cj_available_logistics_uses_current_exact_route(self):
+        with patch.dict(os.environ, {"CJ_API_KEY": "test-key"}, clear=True), \
+             patch.object(providers, "cj_access_token", return_value="access-token"), \
+             patch.object(providers, "_json_request", return_value={"code": 200, "result": True, "data": [{"logisticsName": "CJPacket Ordinary"}]}) as request:
+            methods = providers.cj_available_logistics("CJ-SKU-1", "cn", "us")
+        self.assertEqual(methods, ["CJPacket Ordinary"])
+        self.assertEqual(request.call_args.kwargs["payload"], {
+            "sku": "CJ-SKU-1", "startCountryCode": "CN", "destCountryCode": "US"
+        })
 
     def test_cj_live_creation_needs_both_server_flag_and_per_order_confirmation(self):
         with patch.dict(os.environ, {"CJ_API_KEY": "test-key", "CJ_LIVE_ORDER_CREATION": "true"}, clear=True), \
