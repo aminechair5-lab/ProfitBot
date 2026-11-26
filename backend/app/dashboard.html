@@ -109,8 +109,8 @@ async function quoteCJShipping(){
 function applyCJShippingQuote(index){
  const q=(window.cjFreightQuotes||[])[index];if(!q)return;
  $("offerShipping").value=Number(q.shipping_cost).toFixed(2);$("offerShippingCurrency").value="USD";
- const days=(q.delivery_window||"").match(/(\\d+)\\s*[-–]\\s*(\\d+)/);if(days){$("offerDaysMin").value=days[1];$("offerDaysMax").value=days[2]}
- else{const one=(q.delivery_window||"").match(/\\d+/);if(one){$("offerDaysMin").value=one[0];$("offerDaysMax").value=one[0]}}
+ const days=(q.delivery_window||"").match(/[0-9]+/g);if(days&&days.length>=2){$("offerDaysMin").value=days[0];$("offerDaysMax").value=days[1]}
+ else if(days&&days.length===1){$("offerDaysMin").value=days[0];$("offerDaysMax").value=days[0]}
  const destination=$("cjQuoteDestination").value,markets=$("offerMarkets").value.split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);if(!markets.includes(destination))markets.push(destination);$("offerMarkets").value=markets.join(",");
  $("offerMsg").textContent="أُضيفت تسعيرة CJ والمدة. العرض يظل غير متحقق منه؛ أعد التسعير قبل الاعتماد أو عند تغير الوجهة.";
 }
