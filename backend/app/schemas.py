@@ -8,6 +8,7 @@ class ProductCreate(BaseModel):
     category: str = Field(default="Uncategorized", min_length=1, max_length=100)
     target_market: str = Field(default="Global - validate per country", min_length=1, max_length=100)
     source_url: str | None = Field(default=None, max_length=1000)
+    image_url: str | None = Field(default=None, max_length=1000)
     supplier_name: str | None = Field(default=None, max_length=180)
     supplier_cost: float = Field(default=0, ge=0, allow_inf_nan=False)
     shipping_cost: float = Field(default=0, ge=0, allow_inf_nan=False)
@@ -29,6 +30,16 @@ class ProductCreate(BaseModel):
         if len(value) < 2:
             raise ValueError("name must contain at least two non-space characters")
         return value
+
+    @field_validator("image_url")
+    @classmethod
+    def image_url_must_be_http_url(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        parsed = urlsplit(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("image_url must be an absolute HTTP or HTTPS URL without embedded credentials")
+        return value.strip()
 
     @field_validator("target_market")
     @classmethod

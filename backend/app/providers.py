@@ -238,6 +238,39 @@ def cj_available_logistics(sku: str, start_country_code: str, dest_country_code:
     return [name for row in data if isinstance(row, dict)
             if isinstance((name := row.get("logisticsName")), str) and name.strip()]
 
+def cj_freight_calculate(vid: str, start_country_code: str, end_country_code: str, quantity: int = 1) -> list[dict[str, Any]]:
+    """Return current CJ freight quotes for one exact variant and shipping route."""
+    token = cj_access_token()
+    result = _json_request(
+        "https://developers.cjdropshipping.com/api2.0/v1/logistic/freightCalculate",
+        headers={"CJ-Access-Token": token, "Content-Type": "application/json"},
+        payload={
+            "startCountryCode": start_country_code.strip().upper(),
+            "endCountryCode": end_country_code.strip().upper(),
+            "products": [{"quantity": quantity, "vid": vid.strip()}],
+        },
+    )
+    if result.get("code") not in (0, 200) or result.get("result") is False or result.get("success") is False:
+        raise ProviderRequestError("CJ freight calculation failed: " + str(result.get("message", "unknown error"))[:180])
+    data = result.get("data")
+    if not isinstance(data, list):
+        raise ProviderRequestError("CJ returned an unexpected freight calculation response")
+    quotes = []
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("logisticName")
+        try:
+            price = float(row.get("logisticPrice"))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(name, str) or not name.strip() or price < 0:
+            continue
+        quotes.append({"logistics_name": name.strip(), "shipping_cost": price,
+                       "currency": "USD", "delivery_window": str(row.get("logisticAging") or "").strip()})
+    return quotes
+
+
 def tracking_configured() -> bool:
     return bool(os.getenv("TRACK17_API_KEY"))
 

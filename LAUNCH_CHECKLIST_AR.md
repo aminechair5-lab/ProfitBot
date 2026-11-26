@@ -17,8 +17,8 @@
 **تنبيه الخطة المجانية:** قاعدة Render PostgreSQL المجانية تنتهي بعد 30 يوماً، ولا توفر نسخاً احتياطية. يلزم تصدير البيانات أو الترقية قبل الانتهاء؛ لذلك هي مناسبة للتجربة القصيرة وليست مخزناً دائماً لعمل تجاري.
 
 ### 2. فحص الاتصال والنشر
-- افتح `https://profitbot-484w.onrender.com/health` وتأكد أن الاستجابة من التطبيق وليست `404` مع `x-render-routing: no-server`.
-- افتح `https://profitbot-484w.onrender.com/` وتأكد من ظهور لوحة ProfitBot.
+- افتح `https://profitbot-484v.onrender.com/health` وتأكد أن الاستجابة من التطبيق وليست `404` مع `x-render-routing: no-server`.
+- افتح `https://profitbot-484v.onrender.com/` وتأكد من ظهور لوحة ProfitBot.
 - لا تعتبر فحص Render الداخلي نجاحاً للوصول العام.
 
 ### 3. اختبارات لوحة المالك
